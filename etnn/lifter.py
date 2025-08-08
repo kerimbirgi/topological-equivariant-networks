@@ -504,7 +504,7 @@ class CombinatorialComplexTransform(BaseTransform):
         # self.processed_adjacencies = processed_adjacencies
         # self.merge_neighbors = merge_neighbors
 
-    def __call__(self, graph: Data) -> CombinatorialComplexData:
+    def forward(self, data: Data) -> CombinatorialComplexData:
         """
         Convert a graph to a CombinatorialComplexData object.
 
@@ -518,7 +518,7 @@ class CombinatorialComplexTransform(BaseTransform):
         CombinatorialComplexData
             The converted combinatorial complex data object.
         """
-        ccdict = self.graph_to_ccdict(graph)
+        ccdict = self.graph_to_ccdict(data)
         return CombinatorialComplexData.from_ccdict(ccdict)
 
     def graph_to_ccdict(self, graph: Data) -> dict[str, list]:
@@ -653,7 +653,7 @@ class CombinatorialComplexTransform(BaseTransform):
                 cc_dict[k] = v.tolist()
 
         # remove the molecule from the dictionary
-        cc_dict.pop("mol")
+        cc_dict.pop("mol", None)
 
         return cc_dict
 

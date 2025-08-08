@@ -17,7 +17,9 @@ def main(cfg: DictConfig):
         neighbor_types=list(cfg.dataset.neighbor_types),
         connectivity=cfg.dataset.connectivity,
         supercell=cfg.dataset.supercell,
-        force_reload=False,
+        connect_cross=cfg.dataset.connect_cross,
+        r_cut=cfg.dataset.r_cut,
+        force_reload=cfg.force_reload if 'force_reload' in cfg else False,
     )
     logger.info(f"Lifted BindingNet dataset generated and stored in '{dataset.root}'.")
 

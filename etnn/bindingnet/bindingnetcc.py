@@ -9,8 +9,8 @@ from torch_geometric.data import Data
 import torch
 
 # Class imports
-from etnn.lifter import Lifter, get_adjacency_types
-from etnn.qm9.lifts.registry import LIFTER_REGISTRY
+from etnn.lifter import Lifter, get_adjacency_types, CombinatorialComplexTransform
+from etnn.bindingnet.lifts.registry import LIFTER_REGISTRY
 from preprocess.single_graph_processing import (
     process_ligand_sdf, 
     process_protein_pdb_ligand_style, 
@@ -42,7 +42,6 @@ class BindingNetCC(InMemoryDataset):
         self.lifters = lifters
         self.neighbor_types = neighbor_types
         self.connectivity = connectivity
-        # self.merge_neighbors = merge_neighbors
         self.connect_cross = connect_cross
         self.r_cut = r_cut
         self.supercell = supercell
@@ -54,6 +53,7 @@ class BindingNetCC(InMemoryDataset):
             self.lifters.append("supercell:" + str(self.dim))
 
         # Get lifter and adjacencies
+        self.lifter = Lifter(self.lifters, LIFTER_REGISTRY, self.dim, **lifter_kwargs)
         self.adjacencies = get_adjacency_types(
             self.dim,
             connectivity,
@@ -65,13 +65,12 @@ class BindingNetCC(InMemoryDataset):
             root, transform, pre_transform, pre_filter, force_reload=force_reload
         )
         idx = {'ligand': 0, 'protein': 1, 'merged': 2}[mode]
+        self.load(self.processed_paths[idx])
         # Reload the file that matches the requested mode (default: merged)
-        loaded = torch.load(self.processed_paths[idx])
+        #loaded = torch.load(self.processed_paths[idx])
         # `torch.load` may return (data, slices) or (data, slices, *extras*) depending
         # on the PyG version. We only need the first two elements.
-        self.data, self.slices = loaded[:2]
-
-        self.lifter = Lifter(self.lifters, LIFTER_REGISTRY, self.dim, **lifter_kwargs)
+        #self.data, self.slices = loaded[:2]
 
     @property
     def processed_file_names(self) -> list[str]:
@@ -79,12 +78,13 @@ class BindingNetCC(InMemoryDataset):
 
     def process(self) -> None:
         df = pd.read_csv(self.index)
-
         print(self.processed_paths)
+        ligand_list, protein_list, merged_list = [], [], []
 
-        ligand_list = []
-        protein_list = []
-        merged_list = []
+        lift = CombinatorialComplexTransform(
+            lifter=self.lifter,
+            adjacencies=self.adjacencies,
+        )
 
         for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing BindingNetCC"):
             tuple_id = row['Target ChEMBLID'] + '_' + row['Ligand ChEMBLID']
@@ -97,11 +97,25 @@ class BindingNetCC(InMemoryDataset):
                 ligand_data, 
                 protein_data, 
                 connect_cross=self.connect_cross,
-                r_cut=self.r_cut)
+                r_cut=self.r_cut
+            )
 
             ligand_data.id = tuple_id
             protein_data.id = tuple_id
             merged_data.id = tuple_id
+
+            ligand_data = lift(ligand_data)
+            protein_data = lift(protein_data)
+            merged_data = lift(merged_data)
+
+            if (self.pre_filter is not None and not self.pre_filter(ligand_data)) or \
+                (self.pre_filter is not None and not self.pre_filter(protein_data)) or \
+                (self.pre_filter is not None and not self.pre_filter(merged_data)):
+                continue
+            if self.pre_transform is not None:
+                ligand_data = self.pre_transform(ligand_data)
+                protein_data = self.pre_transform(protein_data)
+                merged_data = self.pre_transform(merged_data)
 
             ligand_list.append(ligand_data)
             protein_list.append(protein_data)
