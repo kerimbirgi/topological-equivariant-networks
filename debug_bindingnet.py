@@ -4,6 +4,8 @@ from etnn.bindingnet.bindingnetcc import BindingNetCC
 import utils
 import os
 import pandas as pd
+from torch_geometric.loader import DataLoader
+import torch
 
 def visualize_3d(pos, edge_index, origin_nodes, num_nodes):
     """Create interactive 3D visualization with Plotly"""
@@ -105,23 +107,28 @@ def visualize_2d(pos, edge_index, origin_nodes, num_nodes):
     except ImportError:
         print("Install matplotlib and networkx for 2D visualization: pip install matplotlib networkx")
 
-def test_etnn_forward_pass(model, cc_data):
+def test_etnn_forward_pass(model, ds):
     """Test a forward pass with an ETNN model to ensure compatibility"""
     try:
-        import torch
+        
         print("\n=== Testing ETNN Forward Pass ===")
     
         # Put model in eval mode
         model.eval()
+
+        # Get dataloader
+        dataloader = DataLoader(ds, batch_size=1, shuffle=False)
+        batch = next(iter(DataLoader([ds[0]], batch_size=1)))
         
         # Perform forward pass
         with torch.no_grad():
             print("Performing forward pass...")
     
-            output = model(cc_data)
+            output = model(batch)
 
             print(f"Forward pass successful!")
             print(f"Output type: {type(output)}")
+            print(f"Output keys: {output}")
 
     except ImportError as e:
         print(f"Missing dependencies for ETNN test: {e}")
@@ -206,7 +213,7 @@ def main(cfg: DictConfig):
     print('Number of merged graphs:', len(ds))
     
     # Test forward pass with ETNN model
-    test_etnn_forward_pass(model, ds[0])
+    test_etnn_forward_pass(model, ds)
     
     # uncomment to visualize the graph
     # visualize_graph(ds[0])
