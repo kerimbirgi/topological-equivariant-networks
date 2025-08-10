@@ -78,7 +78,7 @@ class BindingNetCC(InMemoryDataset):
 
     def process(self) -> None:
         df = pd.read_csv(self.index)
-        print(self.processed_paths)
+
         ligand_list, protein_list, merged_list = [], [], []
 
         lift = CombinatorialComplexTransform(

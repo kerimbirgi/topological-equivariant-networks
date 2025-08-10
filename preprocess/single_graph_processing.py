@@ -209,6 +209,12 @@ def merge_ligand_and_protein(
     x   = torch.cat([ligand.x, protein.x], dim=0)          # (N, F)
     pos = torch.cat([ligand.pos, protein.pos], dim=0)      # (N, 3)
 
+    # Atom-level origin flag: 0 = ligand, 1 = protein
+    lig_flag = torch.zeros((num_lig, 1), dtype=x.dtype, device=x.device)
+    pro_flag = torch.ones((num_pro, 1),  dtype=x.dtype, device=x.device)
+    origin_flag = torch.cat([lig_flag, pro_flag], dim=0)   # (N, 1)
+    x = torch.cat([x, origin_flag], dim=1)                 # (N, F+1)
+
     origin_nodes = torch.cat([
         torch.zeros(num_lig, dtype=torch.long),            # ligand nodes
         torch.ones (num_pro, dtype=torch.long)             # protein nodes
