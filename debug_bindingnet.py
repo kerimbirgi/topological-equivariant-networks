@@ -6,106 +6,72 @@ import os
 import pandas as pd
 from torch_geometric.loader import DataLoader
 import torch
+from etnn.combinatorial_data import CombinatorialComplexData
 
 def visualize_3d(pos, edge_index, origin_nodes, num_nodes):
-    """Create interactive 3D visualization with Plotly"""
+    """3D plot colored by origin: 0=ligand(blue), 1=protein(red)"""
     try:
         import plotly.graph_objects as go
         import numpy as np
-        print("Plotly imported successfully, creating 3D plot...")
-        
-        xyz = pos.numpy()
-        edges = edge_index.t().numpy()
-        print(f"Plotting {xyz.shape[0]} nodes and {edges.shape[0]} edges")
-        
-        # Build edge segments for plotting
+
+        xyz = pos.cpu().numpy()
+        edges = edge_index.t().cpu().numpy()
+
+        # colors from origin_nodes
+        if origin_nodes is None:
+            labels = np.zeros(num_nodes, dtype=int)
+        else:
+            labels = origin_nodes.detach().cpu().numpy().astype(int).reshape(-1)
+        node_colors = np.where(labels == 0, "blue", "red").tolist()
+
         xe, ye, ze = [], [], []
         for s, t in edges:
-            xe += [xyz[s,0], xyz[t,0], None]
-            ye += [xyz[s,1], xyz[t,1], None] 
-            ze += [xyz[s,2], xyz[t,2], None]
-        
-        # Color nodes by origin (ligand=blue, protein=red)
-        node_colors = ['blue' if origin == 0 else 'red' for origin in origin_nodes]
-        
-        edge_trace = go.Scatter3d(
-            x=xe, y=ye, z=ze,
-            mode="lines",
-            line=dict(width=2, color="gray"),
-            name="Edges"
-        )
-        
-        node_trace = go.Scatter3d(
-            x=xyz[:,0], y=xyz[:,1], z=xyz[:,2],
-            mode="markers",
-            marker=dict(size=4, color=node_colors),
-            name="Atoms",
-            text=[f"Node {i}: {'Ligand' if origin_nodes[i]==0 else 'Protein'}" 
-                  for i in range(num_nodes)],
-            hovertemplate="%{text}<extra></extra>"
-        )
-        
+            xe += [xyz[s, 0], xyz[t, 0], None]
+            ye += [xyz[s, 1], xyz[t, 1], None]
+            ze += [xyz[s, 2], xyz[t, 2], None]
+
+        edge_trace = go.Scatter3d(x=xe, y=ye, z=ze, mode="lines",
+                                  line=dict(width=2, color="gray"), name="Edges")
+        node_trace = go.Scatter3d(x=xyz[:, 0], y=xyz[:, 1], z=xyz[:, 2],
+                                  mode="markers",
+                                  marker=dict(size=4, color=node_colors),
+                                  name="Atoms")
+
         fig = go.Figure([edge_trace, node_trace])
-        fig.update_layout(
-            title="Ligand-Protein Complex (Blue=Ligand, Red=Protein)",
-            scene=dict(
-                xaxis_title="X (Å)",
-                yaxis_title="Y (Å)", 
-                zaxis_title="Z (Å)"
-            )
-        )
-        
-        print("Attempting to show 3D plot...")
-        try:
-            # Try different rendering options
-            fig.show(renderer="browser")  # Force browser rendering
-        except Exception as e:
-            print(f"Browser rendering failed: {e}")
-            try:
-                # Save as HTML file instead
-                fig.write_html("ligand_protein_3d.html")
-                print("3D plot saved as 'ligand_protein_3d.html' - open in browser")
-            except Exception as e2:
-                print(f"HTML export also failed: {e2}")
-        
-    except ImportError as e:
-        print(f"Install plotly for 3D visualization: pip install plotly")
-        print(f"Import error: {e}")
+        fig.update_layout(title="Ligand(blue) vs Protein(red)",
+                          scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"))
+        fig.show(renderer="browser")
     except Exception as e:
         print(f"3D visualization error: {e}")
-        import traceback
-        traceback.print_exc()
 
 
 def visualize_2d(pos, edge_index, origin_nodes, num_nodes):
-    """Create 2D visualization with matplotlib and NetworkX"""
+    """2D plot colored by origin: 0=ligand(blue), 1=protein(red)"""
     try:
         import matplotlib.pyplot as plt
         import networkx as nx
-        
-        # Create networkx graph manually
+
         G = nx.Graph()
         G.add_nodes_from(range(num_nodes))
-        edge_list = [(int(edge_index[0, i]), int(edge_index[1, i])) 
-                     for i in range(edge_index.shape[1])]
-        G.add_edges_from(edge_list)
-        
-        # Use 2D projection of 3D coordinates
-        pos_2d = {i: pos[i, :2].tolist() for i in range(num_nodes)}
-        
-        # Color by origin
-        node_colors = ['blue' if origin_nodes[i] == 0 else 'red' 
-                      for i in range(num_nodes)]
-        
+        ei = edge_index.cpu().numpy()
+        G.add_edges_from([(int(ei[0, i]), int(ei[1, i])) for i in range(ei.shape[1])])
+
+        # colors from origin_nodes
+        if origin_nodes is None:
+            labels = [0] * num_nodes
+        else:
+            labels = origin_nodes.detach().cpu().numpy().astype(int).reshape(-1).tolist()
+        node_colors = ["blue" if lbl == 0 else "red" for lbl in labels]
+
+        pos_2d = {i: pos[i, :2].cpu().tolist() for i in range(num_nodes)}
         plt.figure(figsize=(12, 8))
-        nx.draw(G, pos=pos_2d, node_color=node_colors, node_size=20, 
+        nx.draw(G, pos=pos_2d, node_color=node_colors, node_size=20,
                 edge_color="gray", alpha=0.7, width=0.5)
-        plt.title("2D Projection: Blue=Ligand, Red=Protein")
+        plt.title("Ligand(blue) vs Protein(red)")
         plt.axis('equal')
         plt.show()
-        
-    except ImportError:
-        print("Install matplotlib and networkx for 2D visualization: pip install matplotlib networkx")
+    except Exception as e:
+        print(f"2D visualization error: {e}")
 
 def test_etnn_forward_pass(model, ds):
     """Test a forward pass with an ETNN model to ensure compatibility"""
@@ -117,8 +83,8 @@ def test_etnn_forward_pass(model, ds):
         model.eval()
 
         # Get dataloader
-        dataloader = DataLoader(ds, batch_size=1, shuffle=False)
-        batch = next(iter(DataLoader([ds[0]], batch_size=1)))
+        #dataloader = DataLoader(ds, batch_size=1, shuffle=False)
+        batch = next(iter(DataLoader(ds, batch_size=1)))
         
         # Perform forward pass
         with torch.no_grad():
@@ -141,35 +107,29 @@ def test_etnn_forward_pass(model, ds):
 
 
 def visualize_graph(g):
-    # Visualize the merged graph
-    print(f"Data type: {type(g)}")
-    
-    # Handle both regular Data objects and dictionary format from lifter
-    if isinstance(g, dict):
-        # Dictionary format from combinatorial complex lifter
-        print(f"Dictionary keys: {list(g.keys())}")
-        print(f"Graph has {g['x'].shape[0]} nodes and {g['edge_index'].shape[1]} edges")
-        print(f"Node features shape: {g['x'].shape}")
-        print(f"Edge features shape: {g['edge_attr'].shape}")
-        print(f"Position shape: {g['pos'].shape}")
-        
-        # Extract data for visualization
-        pos = g['pos']
-        edge_index = g['edge_index']
-        origin_nodes = g['origin_nodes']
-        num_nodes = g['x'].shape[0]
-    else:
-        # Regular PyG Data object
-        print(f"Graph has {g.num_nodes} nodes and {g.num_edges} edges")
-        print(f"Node features shape: {g.x.shape}")
-        print(f"Edge features shape: {g.edge_attr.shape}")
-        print(f"Position shape: {g.pos.shape}")
-        
-        # Extract data for visualization
+    if isinstance(g, CombinatorialComplexData):
         pos = g.pos
-        edge_index = g.edge_index
-        origin_nodes = g.origin_nodes
-        num_nodes = g.num_nodes
+        num_nodes = pos.size(0)
+
+        # try to get labels from attribute, else from last column of x_0 (origin flag)
+        labels = getattr(g, "origin_nodes", None)
+        if labels is None and hasattr(g, "x_0") and g.x_0 is not None and g.x_0.numel() > 0:
+            # assume last feature column is origin flag (0 ligand, 1 protein)
+            labels = (g.x_0[:, -1] > 0.5).long()
+
+        # pick a 0-0 adjacency if available
+        adj_keys = [k for k in g.keys() if k.startswith("adj_0_0")]
+        if adj_keys:
+            key = sorted(adj_keys)[0]
+            edge_index = getattr(g, key)
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long, device=pos.device)
+
+        # choose one: 2D or 3D
+        #visualize_2d(pos, edge_index, labels, num_nodes)
+        visualize_3d(pos, edge_index, labels, num_nodes)
+    else:
+        visualize_2d(g.pos, g.edge_index, getattr(g, "origin_nodes", None), g.num_nodes)
 
 @hydra.main(config_path="conf/conf_bindingnet", config_name="config", version_base=None)
 def main(cfg: DictConfig):
@@ -200,7 +160,7 @@ def main(cfg: DictConfig):
         lifters=list(cfg.dataset.lifters),
         neighbor_types=list(cfg.dataset.neighbor_types),
         connectivity=cfg.dataset.connectivity,
-        connect_cross=True,
+        connect_cross=False,
         r_cut=5.0,
         mode='merged',
         force_reload=True,
@@ -213,10 +173,10 @@ def main(cfg: DictConfig):
     print('Number of merged graphs:', len(ds))
     
     # Test forward pass with ETNN model
-    test_etnn_forward_pass(model, ds)
+    #test_etnn_forward_pass(model, ds)
     
     # uncomment to visualize the graph
-    # visualize_graph(ds[0])
+    visualize_graph(ds[0])
 
 if __name__ == "__main__":
     """Quick functional test using sample files in test_data/"""
