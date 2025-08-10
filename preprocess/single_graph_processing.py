@@ -2,6 +2,7 @@ import torch
 from rdkit import Chem
 from torch_geometric.data import Data
 from rdkit.Chem.rdchem import BondType as BT
+import os
 #from rdkit.Chem import rdFreeSASA
 #from rdkit.Chem import Crippen
 
@@ -296,8 +297,7 @@ if __name__ == "__main__":
     import argparse
     from tqdm import tqdm
     import pandas as pd
-    from concurrent.futures import ProcessPoolExecutor
-    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     import logging
 
     parser = argparse.ArgumentParser()
@@ -348,14 +348,15 @@ if __name__ == "__main__":
     
     ok = skipped = failed = 0
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-        for tuple_id, status, msg in tqdm(
-            executor.map(
-                build_and_save_pair, 
-                tasks, 
-                chunksize=args.chunksize
-            ), 
-            total=len(tasks)
-        ):
+        fut_to_id = {executor.submit(build_and_save_pair, t): t[0] for t in tasks}
+        for fut in tqdm(as_completed(fut_to_id), total=len(fut_to_id)):
+            tid = fut_to_id[fut]
+            try:
+                tid, status, msg = fut.result()
+            except TimeoutError:
+                failed += 1
+                logger.error(f"{tid} timeout")
+                continue
             if status == "ok":
                 ok += 1
             elif status == "skip":
