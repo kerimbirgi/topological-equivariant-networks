@@ -1,8 +1,26 @@
+import os
+os.environ.update({
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "VECLIB_MAXIMUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "BLIS_NUM_THREADS": "1",
+      "TBB_NUM_THREADS": "1",
+      "MKL_DYNAMIC": "FALSE",
+      # If you see MKL/OpenMP issues after fork:
+      # "KMP_AFFINITY": "granularity=fine,compact,1,0",
+      # "KMP_BLOCKTIME": "0",
+      # "KMP_INIT_AT_FORK": "FALSE",
+  })
+
 import torch
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
 from rdkit import Chem
 from torch_geometric.data import Data
 from rdkit.Chem.rdchem import BondType as BT
-import os
 #from rdkit.Chem import rdFreeSASA
 #from rdkit.Chem import Crippen
 
@@ -299,6 +317,7 @@ if __name__ == "__main__":
     import pandas as pd
     from concurrent.futures import ProcessPoolExecutor, as_completed
     import logging
+    import sys
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -309,12 +328,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_workers", 
         type=int, 
-        default=50
+        default=25
     )
     parser.add_argument(
         "--chunksize", 
         type=int, 
-        default=8
+        default=1
     )
     parser.add_argument(
         "--out_root", 
@@ -349,7 +368,14 @@ if __name__ == "__main__":
     ok = skipped = failed = 0
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
         fut_to_id = {executor.submit(build_and_save_pair, t): t[0] for t in tasks}
-        for fut in tqdm(as_completed(fut_to_id), total=len(fut_to_id)):
+        for fut in tqdm(
+            as_completed(fut_to_id), 
+            total=len(fut_to_id),
+            file=sys.stdout,
+            mininterval=0.2,
+            smoothing=0,
+            dynamic_ncols=True,
+        ):
             tid = fut_to_id[fut]
             try:
                 tid, status, msg = fut.result()
@@ -364,6 +390,8 @@ if __name__ == "__main__":
             else: 
                 failed += 1
                 logger.error(f"{tuple_id} failed: {msg}")
+            sys.stdout.flush()
+            sys.stderr.flush()
     
     logger.info(f"Finished. ok={ok}, skipped={skipped}, failed={failed}, total={len(tasks)}")
     logger.info("Program finished.")
