@@ -1,5 +1,6 @@
 defaults:
   - _self_
+  - dataset: subset_20p
 
 dataset:
   # these values can be overwritten by the experiments
@@ -11,7 +12,7 @@ dataset:
   connectivity: "self"  # Choice in [self, all_to_all]
   # BindingNet stuff
   connect_cross: false
-  r_cut: 5.0
+  r_cut: 3
   mode: "merged"
 
 # task name will make more sense when we introduce the spatial CC
