@@ -1,23 +1,5 @@
 import os
-os.environ.update({
-      "OMP_NUM_THREADS": "1",
-      "MKL_NUM_THREADS": "1",
-      "OPENBLAS_NUM_THREADS": "1",
-      "VECLIB_MAXIMUM_THREADS": "1",
-      "NUMEXPR_NUM_THREADS": "1",
-      "BLIS_NUM_THREADS": "1",
-      "TBB_NUM_THREADS": "1",
-      "MKL_DYNAMIC": "FALSE",
-      # If you see MKL/OpenMP issues after fork:
-      # "KMP_AFFINITY": "granularity=fine,compact,1,0",
-      # "KMP_BLOCKTIME": "0",
-      # "KMP_INIT_AT_FORK": "FALSE",
-  })
-
 import torch
-torch.set_num_threads(1)
-torch.set_num_interop_threads(1)
-
 from rdkit import Chem
 from torch_geometric.data import Data
 from rdkit.Chem.rdchem import BondType as BT
@@ -217,6 +199,10 @@ def merge_ligand_and_protein(
     # ------------------------------------------------------------------ #
     # 1. nodes
     # ------------------------------------------------------------------ #
+    # Assert required tensors exist (helps type checker and avoids runtime None errors)
+    assert ligand.x is not None and ligand.pos is not None and ligand.edge_index is not None and ligand.edge_attr is not None
+    assert protein.x is not None and protein.pos is not None and protein.edge_index is not None and protein.edge_attr is not None
+
     num_lig = ligand.x.size(0)
     num_pro = protein.x.size(0)
 
@@ -288,6 +274,12 @@ def merge_ligand_and_protein(
     return merged
 
 import traceback
+from multiprocessing import get_context
+
+def _atomic_torch_save(obj: object, path: str) -> None:
+    tmp = path + ".tmp"
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
 
 def build_and_save_pair(task):
         tuple_id, ligand_path, pocket_path, out_root = task
@@ -304,12 +296,32 @@ def build_and_save_pair(task):
             ligand.id = tuple_id
             protein.id = tuple_id
 
-            torch.save(ligand.cpu(), lig_out)
-            torch.save(protein.cpu(), pro_out)
+            _atomic_torch_save(ligand.cpu(), lig_out)
+            _atomic_torch_save(protein.cpu(), pro_out)
             return tuple_id, "ok", ""
         except Exception as e:
             err = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=3)}"
             return tuple_id, "fail", err
+
+
+def worker_init() -> None:
+    """Initializer for worker processes to set thread/env limits safely under spawn."""
+    import os as _os
+    import torch as _torch
+    _os.environ.update({
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "BLIS_NUM_THREADS": "1",
+        "TBB_NUM_THREADS": "1",
+        "MKL_DYNAMIC": "FALSE",
+    })
+    try:
+        _torch.set_num_threads(1)
+        _torch.set_num_interop_threads(1)
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     import argparse
@@ -359,14 +371,15 @@ if __name__ == "__main__":
     df = pd.read_csv(args.index)
 
     tasks = []
-    for idx, row in tqdm(df.iterrows(), total=len(df)):
+    for idx, row in tqdm(df.iterrows(), total=len(df), file=sys.stdout):
         tuple_id = row['Target ChEMBLID'] + "_" + row['Molecule ChEMBLID']
         ligand_path = row['ligand_sdf_path']
         pocket_path = row['pocket_pdb_path']
         tasks.append((tuple_id, ligand_path, pocket_path, args.out_root))
     
     ok = skipped = failed = 0
-    with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+    ctx = get_context("spawn")
+    with ProcessPoolExecutor(max_workers=args.num_workers, mp_context=ctx, initializer=worker_init) as executor:
         fut_to_id = {executor.submit(build_and_save_pair, t): t[0] for t in tasks}
         for fut in tqdm(
             as_completed(fut_to_id), 
@@ -377,19 +390,14 @@ if __name__ == "__main__":
             dynamic_ncols=True,
         ):
             tid = fut_to_id[fut]
-            try:
-                tid, status, msg = fut.result()
-            except TimeoutError:
-                failed += 1
-                logger.error(f"{tid} timeout")
-                continue
+            tid, status, msg = fut.result()
             if status == "ok":
                 ok += 1
             elif status == "skip":
                 skipped += 1
             else: 
                 failed += 1
-                logger.error(f"{tuple_id} failed: {msg}")
+                logger.error(f"{tid} failed: {msg}")
             sys.stdout.flush()
             sys.stderr.flush()
     
