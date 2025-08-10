@@ -1,13 +1,9 @@
 import torch
 from rdkit import Chem
 from torch_geometric.data import Data
-from rdkit.Chem import ChemicalFeatures
-from rdkit import RDConfig
 from rdkit.Chem.rdchem import BondType as BT
-from torch_geometric.utils import one_hot
 #from rdkit.Chem import rdFreeSASA
 #from rdkit.Chem import Crippen
-import os
 
 """
 # Build feature factory once
@@ -115,7 +111,6 @@ def process_ligand_sdf(sdf_path: str) -> Data:
 
     edge_index = torch.tensor([rows, cols], dtype=torch.long)  # [2, E]
     edge_attr  = torch.tensor(edge_feat_list, dtype=torch.float32)
-    #edge_attr  = one_hot(edge_type, num_classes=len(BOND_TYPES)).to(torch.float)
 
     perm = (edge_index[0] * mol.GetNumAtoms() + edge_index[1]).argsort()
     edge_index = edge_index[:, perm]
@@ -272,3 +267,89 @@ def merge_ligand_and_protein(
         origin_edges=origin_edges
     )
     return merged
+
+import traceback
+
+def build_and_save_pair(task):
+        tuple_id, ligand_path, pocket_path, out_root = task
+        try:
+            lig_out = os.path.join(out_root, "ligand", f"{tuple_id}.pt")
+            pro_out = os.path.join(out_root, "protein", f"{tuple_id}.pt")
+
+            if os.path.exists(lig_out) and os.path.exists(pro_out):
+                return tuple_id, "skip", ""
+
+            ligand = process_ligand_sdf(ligand_path)
+            protein = process_protein_pdb_ligand_style(pocket_path)
+
+            ligand.id = tuple_id
+            protein.id = tuple_id
+
+            torch.save(ligand.cpu(), lig_out)
+            torch.save(protein.cpu(), pro_out)
+            return tuple_id, "ok", ""
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=3)}"
+            return tuple_id, "fail", err
+
+if __name__ == "__main__":
+    import argparse
+    from tqdm import tqdm
+    import pandas as pd
+    from concurrent.futures import ProcessPoolExecutor
+    import os
+    import logging
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--index", type=str, default="/data2/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv")
+    parser.add_argument("--num_workers", type=int, default=50)
+    parser.add_argument("--chunksize", type=int, default=8)
+    parser.add_argument("--out_root", type=str, default="/data2/")
+    args = parser.parse_args()
+
+    lig_dir = os.path.join(args.out_root, "ligand")
+    pro_dir = os.path.join(args.out_root, "protein")
+    os.makedirs(lig_dir, exist_ok=True)
+    os.makedirs(pro_dir, exist_ok=True)
+
+    # Logger writing only from main process
+    log_path = "/data2/home/kgb24/topological-equivariant-networks/precompute.log"
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+    logger = logging.getLogger("precompute")
+
+    df = pd.read_csv(args.index)
+
+    tasks = []
+    for idx, row in tqdm(df.iterrows(), total=len(df)):
+        tuple_id = row['Target ChEMBLID'] + "_" + row['Molecule ChEMBLID']
+        ligand_path = row['ligand_sdf_path']
+        pocket_path = row['pocket_pdb_path']
+        tasks.append((tuple_id, ligand_path, pocket_path, args.out_root))
+    
+    ok = skipped = failed = 0
+    with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
+        for tuple_id, status, msg in tqdm(
+            executor.map(
+                build_and_save_pair, 
+                tasks, 
+                chunksize=args.chunksize
+            ), 
+            total=len(tasks)
+        ):
+            if status == "ok":
+                ok += 1
+            elif status == "skip":
+                skipped += 1
+            else: 
+                failed += 1
+                logger.error(f"{tuple_id} failed: {msg}")
+    
+    logger.info(f"Finished. ok={ok}, skipped={skipped}, failed={failed}, total={len(tasks)}")
+    logger.info("Program finished.")
+
+
+
