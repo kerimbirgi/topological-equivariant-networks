@@ -304,6 +304,34 @@ def build_and_save_pair(task):
             return tuple_id, "fail", err
 
 
+def merge_from_precomputed(task):
+    """Merge precomputed ligand and protein .pt graphs and save merged .pt
+
+    task = (tuple_id, ligand_pt_path, protein_pt_path, merged_out_path, connect_cross, r_cut)
+    """
+    tuple_id, lig_pt, pro_pt, out_path, connect_cross, r_cut = task
+    try:
+        # Skip if target exists and loads
+        if os.path.exists(out_path):
+            try:
+                g = torch.load(out_path, map_location="cpu", weights_only=False)
+                if getattr(g, "pos", None) is not None and getattr(g, "edge_index", None) is not None:
+                    return tuple_id, "skip", ""
+            except Exception:
+                pass
+
+        lig = torch.load(lig_pt, map_location="cpu", weights_only=False)
+        pro = torch.load(pro_pt, map_location="cpu", weights_only=False)
+
+        merged = merge_ligand_and_protein(lig, pro, connect_cross=connect_cross, r_cut=r_cut)
+        merged.id = tuple_id
+        _atomic_torch_save(merged, out_path)
+        return tuple_id, "ok", ""
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}\n{traceback.format_exc(limit=3)}"
+        return tuple_id, "fail", err
+
+
 def worker_init() -> None:
     """Initializer for worker processes to set thread/env limits safely under spawn."""
     import os as _os
@@ -348,9 +376,32 @@ if __name__ == "__main__":
         default=1
     )
     parser.add_argument(
+        "--phase",
+        choices=["build", "merge"],
+        default="build",
+        help="Phase to run: build ligand/protein or merge precomputed",
+    )
+    parser.add_argument(
+        "--max_tasks_per_child",
+        type=int,
+        default=10,
+        help="Recycle worker processes after this many tasks to avoid hangs/leaks",
+    )
+    parser.add_argument(
         "--out_root", 
         type=str, 
         default="/data2/home/kgb24/topological-equivariant-networks/data/bindingnetcc/subset_20p/preprocessed"
+    )
+    parser.add_argument(
+        "--connect_cross",
+        action="store_true",
+        help="If set in merge phase, create ligand-protein cross edges within r_cut",
+    )
+    parser.add_argument(
+        "--r_cut",
+        type=float,
+        default=5.0,
+        help="Distance cutoff for cross edges in merge phase",
     )
     args = parser.parse_args()
 
@@ -368,34 +419,54 @@ if __name__ == "__main__":
     )
     logger = logging.getLogger("precompute")
 
-    df = pd.read_csv(args.index)
-
     tasks = []
-    for idx, row in tqdm(df.iterrows(), total=len(df), file=sys.stdout):
-        tuple_id = row['Target ChEMBLID'] + "_" + row['Molecule ChEMBLID']
-        ligand_path = row['ligand_sdf_path']
-        pocket_path = row['pocket_pdb_path']
-        tasks.append((tuple_id, ligand_path, pocket_path, args.out_root))
+    if args.phase == "build":
+        df = pd.read_csv(args.index)
+        for idx, row in tqdm(df.iterrows(), total=len(df), file=sys.stdout):
+            tuple_id = row['Target ChEMBLID'] + "_" + row['Molecule ChEMBLID']
+            ligand_path = row['ligand_sdf_path']
+            pocket_path = row['pocket_pdb_path']
+            tasks.append((tuple_id, ligand_path, pocket_path, args.out_root))
+    else:
+        # Phase 2: build tasks from precomputed ligand/protein directories
+        lig_dir = os.path.join(args.out_root, "ligand")
+        pro_dir = os.path.join(args.out_root, "protein")
+        out_dir = os.path.join(args.out_root, "merged")
+        os.makedirs(out_dir, exist_ok=True)
+        lig_ids = {os.path.splitext(f)[0] for f in os.listdir(lig_dir) if f.endswith(".pt")}
+        pro_ids = {os.path.splitext(f)[0] for f in os.listdir(pro_dir) if f.endswith(".pt")}
+        ids = sorted(lig_ids.intersection(pro_ids))
+        for tid in tqdm(ids, total=len(ids), desc="Build merge tasks", file=sys.stdout):
+            lig_pt = os.path.join(lig_dir, f"{tid}.pt")
+            pro_pt = os.path.join(pro_dir, f"{tid}.pt")
+            out_pt = os.path.join(out_dir, f"{tid}.pt")
+            tasks.append((tid, lig_pt, pro_pt, out_pt, args.connect_cross, args.r_cut))
     
     ok = skipped = failed = 0
     ctx = get_context("spawn")
-    with ProcessPoolExecutor(max_workers=args.num_workers, mp_context=ctx, initializer=worker_init) as executor:
-        fut_to_id = {executor.submit(build_and_save_pair, t): t[0] for t in tasks}
-        for fut in tqdm(
-            as_completed(fut_to_id), 
-            total=len(fut_to_id),
+    with ctx.Pool(
+        processes=args.num_workers,
+        initializer=worker_init,
+        maxtasksperchild=args.max_tasks_per_child,
+    ) as pool:
+        if args.phase == "build":
+            iterator = pool.imap_unordered(build_and_save_pair, tasks, chunksize=args.chunksize)
+        else:
+            iterator = pool.imap_unordered(merge_from_precomputed, tasks, chunksize=args.chunksize)
+
+        for tid, status, msg in tqdm(
+            iterator,
+            total=len(tasks),
             file=sys.stdout,
             mininterval=0.2,
             smoothing=0,
             dynamic_ncols=True,
         ):
-            tid = fut_to_id[fut]
-            tid, status, msg = fut.result()
             if status == "ok":
                 ok += 1
             elif status == "skip":
                 skipped += 1
-            else: 
+            else:
                 failed += 1
                 logger.error(f"{tid} failed: {msg}")
             sys.stdout.flush()
