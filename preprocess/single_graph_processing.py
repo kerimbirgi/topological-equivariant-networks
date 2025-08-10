@@ -301,10 +301,26 @@ if __name__ == "__main__":
     import logging
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index", type=str, default="/data2/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv")
-    parser.add_argument("--num_workers", type=int, default=50)
-    parser.add_argument("--chunksize", type=int, default=8)
-    parser.add_argument("--out_root", type=str, default="/data2/")
+    parser.add_argument(
+        "--index", 
+        type=str, 
+        default="/data2/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
+    )
+    parser.add_argument(
+        "--num_workers", 
+        type=int, 
+        default=50
+    )
+    parser.add_argument(
+        "--chunksize", 
+        type=int, 
+        default=8
+    )
+    parser.add_argument(
+        "--out_root", 
+        type=str, 
+        default="/data2/home/kgb24/topological-equivariant-networks/data/bindingnetcc/subset_20p/preprocessed"
+    )
     args = parser.parse_args()
 
     lig_dir = os.path.join(args.out_root, "ligand")
