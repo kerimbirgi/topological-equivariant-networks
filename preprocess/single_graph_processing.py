@@ -433,8 +433,28 @@ if __name__ == "__main__":
         pro_dir = os.path.join(args.out_root, "protein")
         out_dir = os.path.join(args.out_root, "merged")
         os.makedirs(out_dir, exist_ok=True)
-        lig_ids = {os.path.splitext(f)[0] for f in os.listdir(lig_dir) if f.endswith(".pt")}
-        pro_ids = {os.path.splitext(f)[0] for f in os.listdir(pro_dir) if f.endswith(".pt")}
+        lig_files = [f for f in os.listdir(lig_dir) if f.endswith(".pt")]
+        pro_files = [f for f in os.listdir(pro_dir) if f.endswith(".pt")]
+
+        # Basic length check
+        if len(lig_files) != len(pro_files):
+            raise RuntimeError(
+                f"Mismatch between ligand/protein file counts: ligand={len(lig_files)} vs protein={len(pro_files)}"
+            )
+
+        # Stronger: ID set equality check
+        lig_ids = {os.path.splitext(f)[0] for f in lig_files}
+        pro_ids = {os.path.splitext(f)[0] for f in pro_files}
+        if lig_ids != pro_ids:
+            only_lig = sorted(lig_ids - pro_ids)
+            only_pro = sorted(pro_ids - lig_ids)
+            msg = ["Ligand/Protein ID sets differ even though counts match."]
+            if only_lig:
+                msg.append(f"Only in ligand (showing up to 20): {only_lig[:20]}")
+            if only_pro:
+                msg.append(f"Only in protein (showing up to 20): {only_pro[:20]}")
+            raise RuntimeError(" \n".join(msg))
+            
         ids = sorted(lig_ids.intersection(pro_ids))
         for tid in tqdm(ids, total=len(ids), desc="Build merge tasks", file=sys.stdout):
             lig_pt = os.path.join(lig_dir, f"{tid}.pt")
