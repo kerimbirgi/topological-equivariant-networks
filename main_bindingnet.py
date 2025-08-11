@@ -1,10 +1,9 @@
 import copy
-import json
 import logging
 import os
-import random
 import time
 import numpy as np
+import pandas as pd
 
 import hydra
 import torch
@@ -55,18 +54,37 @@ def main(cfg: DictConfig):
     valid_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_indices.npy'))
     test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_indices.npy'))
 
+    # Clean up dataset to only include valid tuples
+    df = pd.read_csv(dataset.index)
+    kept_mask = []
+    for _, row in df.iterrows():
+        tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
+        merged_data_path = os.path.join(dataset.root, 'preprocessed/merged', f'{tuple_id}.pt')
+        kept_mask.append(os.path.exists(merged_data_path))
+    kept_mask = np.array(kept_mask, dtype=bool)
+
+    # Map original to compacted indices
+    compacted = np.cumsum(kept_mask) - 1  # valid where kept_mask is True
+    def remap(orig_idx: np.ndarray) -> np.ndarray:
+        idx = np.asarray(orig_idx, dtype=np.int64).reshape(-1)
+        valid = kept_mask[idx]
+        return compacted[idx[valid]].astype(np.int64)
+    train_sel = remap(train_indices)
+    valid_sel = remap(valid_indices)
+    test_sel  = remap(test_indices)
+
     train_dataloader = DataLoader(
-        dataset[train_indices],
+        dataset.index_select(train_sel),
         batch_size=cfg.training.batch_size,
         shuffle=True,
     )
     valid_dataloader = DataLoader(
-        dataset[valid_indices],
+        dataset.index_select(valid_sel),
         batch_size=cfg.training.batch_size,
         shuffle=False,
     )
     test_dataloader = DataLoader(
-        dataset[test_indices],
+        dataset.index_select(test_sel),
         batch_size=cfg.training.batch_size,
         shuffle=False,
     )
