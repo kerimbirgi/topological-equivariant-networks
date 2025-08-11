@@ -52,7 +52,7 @@ def main(cfg: DictConfig):
 
     # Get train/test splits using the original egnn splits for reference
     train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_indices.npy'))
-    valid_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'validation_indices.npy'))
+    valid_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_indices.npy'))
     test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_indices.npy'))
 
     train_dataloader = DataLoader(

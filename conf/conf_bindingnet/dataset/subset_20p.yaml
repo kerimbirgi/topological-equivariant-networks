@@ -1,2 +1,3 @@
-dataset:
-  connect_cross: false
+connect_cross: false
+index: "/data2/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
+splits_dir: "/data2/BindingNetv2/processed/splits/subset_20p"
