@@ -48,3 +48,4 @@ training:
   clip_amount: 1.0
   test_interval: 10
   lr: 5e-4
+  save_interval: 10
