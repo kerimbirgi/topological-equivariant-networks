@@ -21,9 +21,53 @@ os.environ["WANDB__SERVICE_WAIT"] = "600"
 
 logger = logging.getLogger(__name__)
 
+def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean, crit):
+    # ==== Evaluation ====
+    model.eval()
+    preds = []
+    targets = []
+    tuple_ids = []
+    for _, batch in enumerate(test_dataloader):
+        batch = batch.to(device)
+        pred = model(batch)
+        preds.append(pred)
+        targets.append(batch.y)
+        tuple_ids.append(batch.tuple_id)
+
+    preds = torch.cat(preds)
+    targets = torch.cat(targets)
+    tuple_ids = np.concatenate(tuple_ids)
+
+    if cfg.training.normalize_targets:
+        preds_np = (preds * mad + mean).detach().cpu().numpy()
+    else:
+        preds_np = preds.detach().cpu().numpy()
+    targets_np = targets.detach().cpu().numpy()
+    df = pd.DataFrame({'tuple_id': tuple_ids, 'predictions': preds_np, 'targets': targets_np})
+    df.to_csv(os.path.join(cfg.results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_predictions.csv'), index=False)
+
+    mae = crit(preds * mad + mean, targets)
+    mse = torch.nn.functional.mse_loss(preds * mad + mean, targets)
+    rmse = torch.sqrt(mse)
+    predictions_range = torch.max(preds * mad + mean) - torch.min(preds * mad + mean)
+    targets_range = torch.max(targets) - torch.min(targets)
+    with open(os.path.join(cfg.results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_evaluation.txt'), 'w') as f:
+        f.write(f"Test MAE: {mae.item()}\n")
+        f.write(f"Test MSE: {mse.item()}\n")
+        f.write(f"Test RMSE: {rmse.item()}\n")
+        f.write(f"Predictions range: {predictions_range.item()}\n")
+        f.write(f"Targets range: {targets_range.item()}\n")
+
+    logger.info(f"Test MAE: {mae.item()}")
+    logger.info(f"Test MSE: {mse.item()}")
+    logger.info(f"Test RMSE: {rmse.item()}")
+    logger.info(f"Predictions range: {predictions_range.item()}")
+    logger.info(f"Targets range: {targets_range.item()}")
+
 
 @hydra.main(config_path="conf/conf_bindingnet", config_name="config", version_base=None)
 def main(cfg: DictConfig):
+
     # ==== Initial setup =====
     utils.set_seed(cfg.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -44,6 +88,7 @@ def main(cfg: DictConfig):
 
     # ==== Get model =====
     model = utils.get_model(cfg, dataset)
+    model = model.to(device)
     model = model.to(device)
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -144,6 +189,11 @@ def main(cfg: DictConfig):
         )
     best_loss = float("inf")
 
+    # ==== If eval only, evaluate and exit ====
+    if cfg.eval_only:
+        evaluate(cfg, model, test_dataloader, device, mad, mean, crit)
+        return
+
     # === Configure checkpoint and wandb logging ===
     ckpt_filename = f"{cfg.experiment_name}__{cfg.dataset_name}.pth"
     if cfg.ckpt_prefix is not None:
@@ -212,7 +262,11 @@ def main(cfg: DictConfig):
         for _, batch in enumerate(valid_dataloader):
             batch = batch.to(device)
             pred = model(batch)
-            mae = crit(pred * mad + mean, batch.y)
+            
+            if cfg.training.normalize_targets:
+                mae = crit(pred * mad + mean, batch.y)
+            else:
+                mae = crit(pred, batch.y)
 
             epoch_mae_val += mae.item()
 

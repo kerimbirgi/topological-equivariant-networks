@@ -144,7 +144,7 @@ def main(cfg: DictConfig):
     if not os.path.exists(csv_path):
         df = pd.DataFrame({
             'Target ChEMBLID': ['TEST_TARGET'],
-            'Ligand ChEMBLID': ['TEST_LIGAND'],
+            'Molecule ChEMBLID': ['TEST_LIGAND'],
             'ligand_sdf_path': [os.path.join(test_dir, 'ligand.sdf')],
             'pocket_pdb_path': [os.path.join(test_dir, 'pocket_6A.pdb')],
         })
@@ -160,7 +160,7 @@ def main(cfg: DictConfig):
         lifters=list(cfg.dataset.lifters),
         neighbor_types=list(cfg.dataset.neighbor_types),
         connectivity=cfg.dataset.connectivity,
-        connect_cross=False,
+        connect_cross=True,
         r_cut=5.0,
         mode='merged',
         force_reload=True,
@@ -176,7 +176,7 @@ def main(cfg: DictConfig):
     #test_etnn_forward_pass(model, ds)
     
     # uncomment to visualize the graph
-    visualize_graph(ds[0])
+    visualize_graph(ds)
 
 if __name__ == "__main__":
     """Quick functional test using sample files in test_data/"""

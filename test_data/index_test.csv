@@ -1,2 +1,2 @@
-Target ChEMBLID,Ligand ChEMBLID,ligand_sdf_path,pocket_pdb_path
+Target ChEMBLID,Molecule ChEMBLID,ligand_sdf_path,pocket_pdb_path
 TEST_TARGET,TEST_LIGAND,/Users/kerimbirgi/dev/topological-equivariant-networks/test_data/ligand.sdf,/Users/kerimbirgi/dev/topological-equivariant-networks/test_data/pocket_6A.pdb
