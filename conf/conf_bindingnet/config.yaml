@@ -15,10 +15,12 @@ dataset:
   r_cut: 3
   mode: "merged"
 
-# task name will make more sense when we introduce the spatial CC
+
 task_name: BindingNet
 dataset_name: ${hydra:runtime.choices.dataset}
 experiment_name: ${hydra:runtime.choices.experiment}
+results_dir: results
+eval_only: true
 
 compile: false
 seed: 42
