@@ -21,6 +21,7 @@ dataset_name: ${hydra:runtime.choices.dataset}
 experiment_name: ${hydra:runtime.choices.experiment}
 results_dir: results
 eval_only: true
+force_reload: true
 
 compile: false
 seed: 42
