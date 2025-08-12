@@ -44,47 +44,73 @@ def main(cfg: DictConfig):
 
     # ==== Get model =====
     model = utils.get_model(cfg, dataset)
+    model = model.to(device)
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Number of parameters: {num_params:}")
     logger.info(model)
 
     # Get train/test splits using the original egnn splits for reference
-    train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_indices.npy'))
-    valid_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_indices.npy'))
-    test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_indices.npy'))
+    if cfg.dataset.use_postprocessed:
+        train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_sel_postprocessed.npy'))
+        valid_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_sel_postprocessed.npy'))
+        test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_sel_postprocessed.npy'))
+    else:
+        train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_indices.npy'))
+        valid_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_indices.npy'))
+        test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_indices.npy'))
 
-    # Clean up dataset to only include valid tuples
-    df = pd.read_csv(dataset.index)
-    kept_mask = []
-    for _, row in df.iterrows():
-        tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
-        merged_data_path = os.path.join(dataset.root, 'preprocessed/merged', f'{tuple_id}.pt')
-        kept_mask.append(os.path.exists(merged_data_path))
-    kept_mask = np.array(kept_mask, dtype=bool)
+    if cfg.dataset.cleanup_postprocess:
+        # Clean up dataset to only include valid tuples
+        df = pd.read_csv(dataset.index)
+        kept_mask = []
+        for _, row in df.iterrows():
+            tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
+            merged_data_path = os.path.join(dataset.root, 'preprocessed/merged', f'{tuple_id}.pt')
+            kept_mask.append(os.path.exists(merged_data_path))
+        kept_mask = np.array(kept_mask, dtype=bool)
 
-    # Map original to compacted indices
-    compacted = np.cumsum(kept_mask) - 1  # valid where kept_mask is True
-    def remap(orig_idx: np.ndarray) -> np.ndarray:
-        idx = np.asarray(orig_idx, dtype=np.int64).reshape(-1)
-        valid = kept_mask[idx]
-        return compacted[idx[valid]].astype(np.int64)
-    train_sel = remap(train_indices)
-    valid_sel = remap(valid_indices)
-    test_sel  = remap(test_indices)
+        # Map original to compacted indices
+        compacted = np.cumsum(kept_mask) - 1  # valid where kept_mask is True
+        def remap(orig_idx: np.ndarray) -> np.ndarray:
+            idx = np.asarray(orig_idx, dtype=np.int64).reshape(-1)
+            valid = kept_mask[idx]
+            return compacted[idx[valid]].astype(np.int64)
+        train_sel = remap(train_indices)
+        valid_sel = remap(valid_indices)
+        test_sel  = remap(test_indices)
+
+        np.save(os.path.join(cfg.dataset.splits_dir, 'train_sel_postprocessed.npy'), train_sel)
+        np.save(os.path.join(cfg.dataset.splits_dir, 'val_sel_postprocessed.npy'), valid_sel)
+        np.save(os.path.join(cfg.dataset.splits_dir, 'test_sel_postprocessed.npy'), test_sel)
+        print("saved new indices to:")
+        print(cfg.dataset.splits_dir)
+    else:
+        # keep things as they are since cleanup already done or not necessary
+        train_sel = train_indices
+        valid_sel = valid_indices
+        test_sel = test_indices
+
+    train_subset = dataset.index_select(train_sel)
+    valid_subset = dataset.index_select(valid_sel)
+    test_subset = dataset.index_select(test_sel)
+
+    print(f"Length of train dataset: {len(train_subset)}")
+    print(f"Length of validation dataset: {len(valid_subset)}")
+    print(f"Length of test dataset: {len(test_subset)}")
 
     train_dataloader = DataLoader(
-        dataset.index_select(train_sel),
+        train_subset,
         batch_size=cfg.training.batch_size,
         shuffle=True,
     )
     valid_dataloader = DataLoader(
-        dataset.index_select(valid_sel),
+        valid_subset,
         batch_size=cfg.training.batch_size,
         shuffle=False,
     )
     test_dataloader = DataLoader(
-        dataset.index_select(test_sel),
+        test_subset,
         batch_size=cfg.training.batch_size,
         shuffle=False,
     )
@@ -97,10 +123,25 @@ def main(cfg: DictConfig):
     crit = torch.nn.L1Loss(reduction="mean")
     opt_kwargs = dict(lr=cfg.training.lr, weight_decay=cfg.training.weight_decay)
     opt = torch.optim.Adam(model.parameters(), **opt_kwargs)
-    T_max = cfg.training.epochs // cfg.training.num_lr_cycles
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-        opt, T_max, eta_min=cfg.training.min_lr
-    )
+    if cfg.training.lambdalr:
+        print("using lambdalr")
+        warm_epochs = 5                       # 5 % of 100 epochs
+        total_epochs = cfg.training.epochs
+
+        def lr_lambda(epoch):
+            if epoch < warm_epochs:
+                return (epoch + 1) / warm_epochs            # linear warm-up 0→1
+            # cosine part: epoch ∈ [warm, total)
+            cosine_e = epoch - warm_epochs
+            cosine_T = total_epochs - warm_epochs
+            return 0.5 * (1 + np.cos(np.pi * cosine_e / cosine_T))
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
+    else:
+        print("using cosineannealinglr")
+        T_max = cfg.training.epochs // cfg.training.num_lr_cycles
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max, eta_min=cfg.training.min_lr
+        )
     best_loss = float("inf")
 
     # === Configure checkpoint and wandb logging ===
@@ -138,11 +179,14 @@ def main(cfg: DictConfig):
     )
 
     # === Training loop ===
-    for epoch in tqdm(range(start_epoch, cfg.training.epochs)):
+    num_epochs=cfg.training.epochs
+    epoch_iter = tqdm(range(start_epoch, cfg.training.epochs), desc="Epochs", position=0)
+    for epoch in epoch_iter:
         epoch_start_time, epoch_mae_train, epoch_loss_train, epoch_mae_val = time.time(), 0, 0, 0
 
         model.train()
-        for _, batch in enumerate(train_dataloader):
+        batch_iter = tqdm(train_dataloader, desc=f"Train {epoch+1}/{num_epochs}", position=1, leave=False)
+        for batch in batch_iter:
             opt.zero_grad()
             batch = batch.to(device)
 
@@ -160,6 +204,7 @@ def main(cfg: DictConfig):
 
             epoch_loss_train += loss.item()
             epoch_mae_train += mae.item()
+            batch_iter.set_postfix(loss=float(loss.item()), lr=sched.get_last_lr()[0])  
         
 
         sched.step()
@@ -206,6 +251,7 @@ def main(cfg: DictConfig):
             },
             step=epoch,
         )
+        epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val)
 
 
 
