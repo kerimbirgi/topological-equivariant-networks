@@ -217,7 +217,7 @@ class ETNN(nn.Module):
         if self.global_pool:
             # create one dummy node with all features equal to zero for each graph and each rank
             cell_batch = {
-                str(i): utils.slices_to_pointer(graph._slice_dict[f"slices_{i}"])
+                str(i): utils.slices_to_pointer(graph._slice_dict[f"slices_{i}"]).to(device)
                 for i in self.visible_dims
             }
             out = {

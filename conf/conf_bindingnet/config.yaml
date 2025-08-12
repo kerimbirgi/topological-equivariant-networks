@@ -51,4 +51,5 @@ training:
   test_interval: 10
   lr: 5e-4
   save_interval: 10
+  lambdalr: false
   normalize_targets: false

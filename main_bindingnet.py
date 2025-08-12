@@ -32,7 +32,7 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean, crit):
         pred = model(batch)
         preds.append(pred)
         targets.append(batch.y)
-        tuple_ids.append(batch.tuple_id)
+        tuple_ids.append(batch.id)
 
     preds = torch.cat(preds)
     targets = torch.cat(targets)
