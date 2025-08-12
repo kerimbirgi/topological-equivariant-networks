@@ -21,48 +21,56 @@ os.environ["WANDB__SERVICE_WAIT"] = "600"
 
 logger = logging.getLogger(__name__)
 
-def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean, crit):
+def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     # ==== Evaluation ====
     model.eval()
-    preds = []
-    targets = []
-    tuple_ids = []
-    for _, batch in enumerate(test_dataloader):
-        batch = batch.to(device)
-        pred = model(batch)
-        preds.append(pred)
-        targets.append(batch.y)
-        tuple_ids.append(batch.id)
+    preds_cpu: list[torch.Tensor] = []
+    targets_cpu: list[torch.Tensor] = []
+    with torch.inference_mode():
+        for batch in test_dataloader:
+            batch = batch.to(device)
+            pred = model(batch)
+            preds_cpu.append(pred.detach().cpu())
+            targets_cpu.append(batch.y.detach().cpu())
 
-    preds = torch.cat(preds)
-    targets = torch.cat(targets)
-    tuple_ids = np.concatenate(tuple_ids)
+    preds = torch.cat(preds_cpu)   # on CPU
+    targets = torch.cat(targets_cpu)  # on CPU
 
+    # Denormalize on CPU only if normalization was used
     if cfg.training.normalize_targets:
-        preds_np = (preds * mad + mean).detach().cpu().numpy()
+        logging.info("Using normalized targets")
+        mean_cpu = mean.detach().cpu()
+        mad_cpu = mad.detach().cpu()
+        denorm_preds = preds * mad_cpu + mean_cpu
     else:
-        preds_np = preds.detach().cpu().numpy()
-    targets_np = targets.detach().cpu().numpy()
-    df = pd.DataFrame({'tuple_id': tuple_ids, 'predictions': preds_np, 'targets': targets_np})
+        logging.info("Using unnormalized targets")
+        denorm_preds = preds
+
+    # Save predictions/targets to CSV as plain numeric arrays
+    df = pd.DataFrame({
+        'predictions': denorm_preds.numpy().ravel(),
+        'targets': targets.numpy().ravel(),
+    })
     df.to_csv(os.path.join(cfg.results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_predictions.csv'), index=False)
 
-    mae = crit(preds * mad + mean, targets)
-    mse = torch.nn.functional.mse_loss(preds * mad + mean, targets)
+    # Compute metrics on CPU
+    mae = torch.nn.functional.l1_loss(denorm_preds, targets, reduction='mean')
+    mse = torch.nn.functional.mse_loss(denorm_preds, targets, reduction='mean')
     rmse = torch.sqrt(mse)
-    predictions_range = torch.max(preds * mad + mean) - torch.min(preds * mad + mean)
-    targets_range = torch.max(targets) - torch.min(targets)
+    predictions_range = f"[{torch.max(denorm_preds)}, {torch.min(denorm_preds)}]"
+    targets_range = f"[{torch.max(targets)}, {torch.min(targets)}]"
     with open(os.path.join(cfg.results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_evaluation.txt'), 'w') as f:
         f.write(f"Test MAE: {mae.item()}\n")
         f.write(f"Test MSE: {mse.item()}\n")
         f.write(f"Test RMSE: {rmse.item()}\n")
-        f.write(f"Predictions range: {predictions_range.item()}\n")
-        f.write(f"Targets range: {targets_range.item()}\n")
+        f.write(f"Predictions range: {predictions_range}\n")
+        f.write(f"Targets range: {targets_range}\n")
 
     logger.info(f"Test MAE: {mae.item()}")
     logger.info(f"Test MSE: {mse.item()}")
     logger.info(f"Test RMSE: {rmse.item()}")
-    logger.info(f"Predictions range: {predictions_range.item()}")
-    logger.info(f"Targets range: {targets_range.item()}")
+    logger.info(f"Predictions range: {predictions_range}")
+    logger.info(f"Targets range: {targets_range}")
 
 
 @hydra.main(config_path="conf/conf_bindingnet", config_name="config", version_base=None)
@@ -191,7 +199,8 @@ def main(cfg: DictConfig):
 
     # ==== If eval only, evaluate and exit ====
     if cfg.eval_only:
-        evaluate(cfg, model, test_dataloader, device, mad, mean, crit)
+        logger.info("Running evaluation only")
+        evaluate(cfg, model, test_dataloader, device, mad, mean)
         return
 
     # === Configure checkpoint and wandb logging ===

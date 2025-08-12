@@ -21,7 +21,7 @@ dataset_name: ${hydra:runtime.choices.dataset}
 experiment_name: ${hydra:runtime.choices.experiment}
 results_dir: results
 eval_only: true
-force_reload: true
+force_reload: false
 
 compile: false
 seed: 42
@@ -53,4 +53,4 @@ training:
   lr: 5e-4
   save_interval: 10
   lambdalr: false
-  normalize_targets: false
+  normalize_targets: true

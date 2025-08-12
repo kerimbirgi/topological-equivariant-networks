@@ -80,14 +80,14 @@ class BindingNetCC(InMemoryDataset):
 
         for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing BindingNetCC"):
             tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
-            merged_data_path = os.path.join(self.root, 'merged', f'{tuple_id}.pt')
+            merged_data_path = os.path.join(self.root, 'preprocessed/merged', f'{tuple_id}.pt')
             if not os.path.exists(merged_data_path):
                 logger.warning(f"Merged data not found for {tuple_id}")
                 continue
 
             merged_data = torch.load(merged_data_path)
             merged_data = lift(merged_data)
-            merged_data.id = tuple_id # keep identifier for later evaluation/logging
+            #merged_data.id = tuple_id # keep identifier for later evaluation/logging
 
             y_val = torch.tensor([float(row['-logAffi'])], dtype=torch.float32)
             merged_data.y = y_val
