@@ -87,7 +87,7 @@ class BindingNetCC(InMemoryDataset):
 
             merged_data = torch.load(merged_data_path)
             merged_data = lift(merged_data)
-            #merged_data.id = tuple_id # keep identifier for later evaluation/logging
+            merged_data.id = tuple_id # keep identifier for later evaluation/logging
 
             y_val = torch.tensor([float(row['-logAffi'])], dtype=torch.float32)
             merged_data.y = y_val
