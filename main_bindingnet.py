@@ -97,7 +97,6 @@ def main(cfg: DictConfig):
     # ==== Get model =====
     model = utils.get_model(cfg, dataset)
     model = model.to(device)
-    model = model.to(device)
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Number of parameters: {num_params:}")
