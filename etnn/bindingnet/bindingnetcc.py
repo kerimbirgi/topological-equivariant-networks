@@ -85,7 +85,8 @@ class BindingNetCC(InMemoryDataset):
                 logger.warning(f"Merged data not found for {tuple_id}")
                 continue
 
-            merged_data = torch.load(merged_data_path)
+            # Explicitly disable weights_only to load full PyG Data objects on PyTorch >=2.6
+            merged_data = torch.load(merged_data_path, weights_only=False)
             merged_data = lift(merged_data)
             #merged_data.id = tuple_id # keep identifier for later evaluation/logging
 
