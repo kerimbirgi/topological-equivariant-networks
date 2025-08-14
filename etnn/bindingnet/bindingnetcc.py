@@ -88,7 +88,7 @@ class BindingNetCC(InMemoryDataset):
             # Explicitly disable weights_only to load full PyG Data objects on PyTorch >=2.6
             merged_data = torch.load(merged_data_path, weights_only=False)
             merged_data = lift(merged_data)
-            #merged_data.id = tuple_id # keep identifier for later evaluation/logging
+            merged_data.id = tuple_id # keep identifier for later evaluation/logging
 
             y_val = torch.tensor([float(row['-logAffi'])], dtype=torch.float32)
             merged_data.y = y_val

@@ -19,6 +19,7 @@ def load_checkpoint(checkpoint_path, model, opt, sched, force_restart):
     best_model = copy.deepcopy(model)
     device = next(model.parameters()).device
     if not force_restart and os.path.isfile(checkpoint_path):
+        print("Loading model from checkpoint!")
         checkpoint = torch.load(checkpoint_path)
         model.to("cpu")
         best_model.to("cpu")

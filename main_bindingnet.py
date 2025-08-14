@@ -196,21 +196,24 @@ def main(cfg: DictConfig):
         )
     best_loss = float("inf")
 
-    # ==== If eval only, evaluate and exit ====
-    if cfg.eval_only:
-        logger.info("Running evaluation only")
-        evaluate(cfg, model, test_dataloader, device, mad, mean)
-        return
 
     # === Configure checkpoint and wandb logging ===
     ckpt_filename = f"{cfg.experiment_name}__{cfg.dataset_name}.pth"
     if cfg.ckpt_prefix is not None:
         ckpt_filename = f"{cfg.ckpt_prefix}_{ckpt_filename}"
     checkpoint_path = f"{cfg.ckpt_dir}/{ckpt_filename}"
+    logging.info(f"Checkpoint path set as: {checkpoint_path}")
 
     start_epoch, run_id, best_model, best_loss = utils.load_checkpoint(
         checkpoint_path, model, opt, sched, cfg.force_restart
     )
+
+    # ==== If eval only, evaluate and exit ====
+    if cfg.eval_only:
+        logger.info("Running evaluation only")
+        evaluate(cfg, model, test_dataloader, device, mad, mean)
+        return
+    # ==== otherwise continue training ====
 
     if start_epoch >= cfg.training.epochs:
         logger.info("Training already completed. Exiting.")
