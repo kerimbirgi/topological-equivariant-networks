@@ -1,4 +1,8 @@
-connect_cross: true
 index: "/data2/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
 splits_dir: "/data2/BindingNetv2/processed/splits/subset_20p"
 use_postprocessed: true
+supercell: false
+connectivity: "self"  # Choice in [self, all_to_all]
+# BindingNet stuff
+connect_cross: true
+r_cut: 3
