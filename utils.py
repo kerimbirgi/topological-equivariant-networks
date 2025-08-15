@@ -30,6 +30,13 @@ def load_checkpoint(checkpoint_path, model, opt, sched, force_restart):
         sched.load_state_dict(checkpoint["scheduler"])
         model.to(device)
         best_model.to(device)
+        
+        # BUG FIX ATTEMPT: Ensure optimizer state is on the correct device
+        for state in opt.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
+        
         return checkpoint["epoch"], checkpoint["run_id"], best_model, best_loss
     else:
         return 0, None, best_model, float("inf")
