@@ -1,5 +1,5 @@
-index: "/data2/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
-splits_dir: "/data2/BindingNetv2/processed/splits/subset_20p"
+index: "/rds/general/user/kgb24/home/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
+splits_dir: "/rds/general/user/kgb24/home/BindingNetv2/processed/splits/subset_20p"
 use_postprocessed: true
 supercell: false
 connectivity: "self"  # Choice in [self, all_to_all]

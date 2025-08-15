@@ -10,7 +10,7 @@ splits_dir: "/data2/BindingNetv2/processed/splits/subset_20p"
 use_postprocessed: true
 supercell: false
 connectivity: "self"  # Choice in [self, all_to_all]
-# BindingNet stuff
-connect_cross: true
+# BindingNet Stuff
+connect_cross: false
 r_cut: 3
 >>>>>>>> ae9fa7f83b857c51c12aaed930efad031219ba19:conf/conf_bindingnet/dataset/subset_20p_crossconnect_rcut3.yaml

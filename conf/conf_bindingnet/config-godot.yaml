@@ -12,8 +12,6 @@ dataset:
   neighbor_types: ["max"]  # Subset of ["+1", "-1", "min", "max"]
   connectivity: "self"  # Choice in [self, all_to_all]
   # BindingNet stuff
-  cleanup_postprocess: false
-  use_postprocessed: true
   merge_graphs: false
   connect_cross: false
   r_cut: 3

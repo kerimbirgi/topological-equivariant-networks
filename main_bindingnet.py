@@ -75,7 +75,8 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
 
 @hydra.main(config_path="conf/conf_bindingnet", config_name="config", version_base=None)
 def main(cfg: DictConfig):
-
+    logger.debug("Imports successful and program started")
+    
     # ==== Initial setup =====
     utils.set_seed(cfg.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -219,25 +220,6 @@ def main(cfg: DictConfig):
         logger.info("Training already completed. Exiting.")
         return
 
-    # init wandb logger
-    if run_id is None:
-        run_id = ckpt_filename.split(".")[0] + "__" + wandb.util.generate_id()
-        if cfg.ckpt_prefix is not None:
-            run_id = "__".join([cfg.ckpt_prefix, run_id])
-
-    # create wandb config and add number of parameters
-    wandb_config = OmegaConf.to_container(cfg, resolve=True)
-    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    wandb_config["num_params"] = num_params
-
-    wandb.init(
-        project="bindingnet_regression",
-        name=f"{cfg.experiment_name}_{cfg.dataset_name}",
-        entity=os.environ.get("WANDB_ENTITY"),
-        config=wandb_config,
-        id=run_id,
-        resume="allow",
-    )
 
     # === Training loop ===
     num_epochs=cfg.training.epochs

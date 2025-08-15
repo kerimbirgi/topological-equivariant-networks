@@ -3,6 +3,12 @@ import torch
 from rdkit import Chem
 from torch_geometric.data import Data
 from rdkit.Chem.rdchem import BondType as BT
+import argparse
+from tqdm import tqdm
+import pandas as pd
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import logging
+import sys
 #from rdkit.Chem import rdFreeSASA
 #from rdkit.Chem import Crippen
 
@@ -351,13 +357,23 @@ def worker_init() -> None:
     except Exception:
         pass
 
+def create_graphs_from_dataset(
+                df: pd.DataFrame, 
+                preprocessed_graphs_path, 
+                merged_data_path_root,
+                connect_cross,
+                r_cut
+            ): 
+    """
+    Process:
+    1. Reads graphs from ligand/protein directory 
+    2. Creates merged graphs
+    3. Stores them in merged_data_path_root
+    """
+    lig_dir = os.path.join(args.out_root, "ligand")
+    pro_dir = os.path.join(args.out_root, "protein")
+
 if __name__ == "__main__":
-    import argparse
-    from tqdm import tqdm
-    import pandas as pd
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    import logging
-    import sys
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
