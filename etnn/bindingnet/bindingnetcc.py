@@ -78,9 +78,26 @@ class BindingNetCC(InMemoryDataset):
             adjacencies=self.adjacencies,
         )
 
+        # Path for merged data
+        if self.supercell:
+            supercell_str = 'supercell'
+        else:
+            supercell_str = 'no_supercell'
+        if self.connect_cross:
+            r_cut_str = f'r_cut_{self.r_cut}'
+            connect_cross_str = 'connect_cross_' + r_cut_str
+        else:
+            connect_cross_str = 'no_connect_cross'
+        if self.connectivity == 'all':
+            connectivity_str = 'all'
+        else:
+            connectivity_str = 'no_all'
+        dataset_modifications = f'{supercell_str}_{connect_cross_str}_{connectivity_str}'
+        merged_data_path_root = os.path.join(self.root, f'preprocessed/merged/{dataset_modifications}')
+
         for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing BindingNetCC"):
             tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
-            merged_data_path = os.path.join(self.root, 'preprocessed/merged', f'{tuple_id}.pt')
+            merged_data_path = os.path.join(merged_data_path_root, f'{tuple_id}.pt')
             if not os.path.exists(merged_data_path):
                 logger.warning(f"Merged data not found for {tuple_id}")
                 continue
