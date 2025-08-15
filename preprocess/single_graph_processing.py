@@ -373,14 +373,7 @@ def create_graphs_from_dataset(
     2. Creates merged graphs
     3. Stores them in merged_data_path_root
     """
-    # Logger writing only from main process
-    log_path = f"/rds/general/user/kgb24/home/topological-equivariant-networks/merge_graphs_{connect_cross}_{r_cut}.log"
-    logging.basicConfig(
-        filename=log_path,
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
-    logger = logging.getLogger("preprocess")
+    logger = logging.getLogger(__name__)
 
     lig_dir = os.path.join(preprocessed_graphs_path, "ligand")
     pro_dir = os.path.join(preprocessed_graphs_path, "protein")
@@ -407,6 +400,7 @@ def create_graphs_from_dataset(
             msg.append(f"Only in protein (showing up to 20): {only_pro[:20]}")
         raise RuntimeError(" \n".join(msg))
         
+    tasks = []
     ids = sorted(lig_ids.intersection(pro_ids))
     for tid in tqdm(ids, total=len(ids), desc="Build merge tasks", file=sys.stdout):
         lig_pt = os.path.join(lig_dir, f"{tid}.pt")

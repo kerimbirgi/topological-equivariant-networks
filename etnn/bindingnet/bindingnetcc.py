@@ -99,6 +99,7 @@ class BindingNetCC(InMemoryDataset):
 
         if self.merge_graphs:
             logger.info("Creating merged graphs from existing ligand and protein graphs")
+            os.makedirs(merged_data_path_root, exist_ok=True)
             create_graphs_from_dataset(
                 df, 
                 self.preprocessed_graphs_path, 
