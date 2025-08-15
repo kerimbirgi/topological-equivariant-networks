@@ -1,6 +1,7 @@
 defaults:
   - _self_
   - dataset: subset_20p
+  - experiment: 128_dims
 
 dataset:
   # these values can be overwritten by the experiments
@@ -19,7 +20,7 @@ task_name: BindingNet
 dataset_name: ${hydra:runtime.choices.dataset}
 experiment_name: ${hydra:runtime.choices.experiment}
 results_dir: results
-eval_only: true
+eval_only: false
 force_reload: false
 
 compile: false
@@ -46,7 +47,7 @@ training:
   weight_decay: 1e-16
   min_lr: 0.0
   num_lr_cycles: 3
-  clip_gradients: true
+  clip_gradients: false
   clip_amount: 1.0
   test_interval: 10
   lr: 5e-4

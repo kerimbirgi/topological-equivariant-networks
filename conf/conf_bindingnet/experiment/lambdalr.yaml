@@ -1,4 +1,0 @@
-training:
-  lr: 0.001
-  clip_gradients: false
-  lambdalr: true
