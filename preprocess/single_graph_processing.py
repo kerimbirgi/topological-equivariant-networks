@@ -359,10 +359,13 @@ def worker_init() -> None:
 
 def create_graphs_from_dataset(
                 df: pd.DataFrame, 
-                preprocessed_graphs_path, 
-                merged_data_path_root,
-                connect_cross,
-                r_cut
+                preprocessed_graphs_path: str, 
+                merged_data_path_root: str,
+                connect_cross: bool,
+                r_cut: float,
+                num_workers: int = 4,
+                chunksize: int = 8,
+                max_tasks_per_child: int = 10,
             ): 
     """
     Process:
@@ -370,8 +373,80 @@ def create_graphs_from_dataset(
     2. Creates merged graphs
     3. Stores them in merged_data_path_root
     """
-    lig_dir = os.path.join(args.out_root, "ligand")
-    pro_dir = os.path.join(args.out_root, "protein")
+    # Logger writing only from main process
+    log_path = f"/rds/general/user/kgb24/home/topological-equivariant-networks/merge_graphs_{connect_cross}_{r_cut}.log"
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+    logger = logging.getLogger("preprocess")
+
+    lig_dir = os.path.join(preprocessed_graphs_path, "ligand")
+    pro_dir = os.path.join(preprocessed_graphs_path, "protein")
+
+    lig_files = [f for f in os.listdir(lig_dir) if f.endswith(".pt")]
+    pro_files = [f for f in os.listdir(pro_dir) if f.endswith(".pt")]
+
+    # Basic length check
+    if len(lig_files) != len(pro_files):
+        raise RuntimeError(
+            f"Mismatch between ligand/protein file counts: ligand={len(lig_files)} vs protein={len(pro_files)}"
+        )
+
+    # Stronger: ID set equality check
+    lig_ids = {os.path.splitext(f)[0] for f in lig_files}
+    pro_ids = {os.path.splitext(f)[0] for f in pro_files}
+    if lig_ids != pro_ids:
+        only_lig = sorted(lig_ids - pro_ids)
+        only_pro = sorted(pro_ids - lig_ids)
+        msg = ["Ligand/Protein ID sets differ even though counts match."]
+        if only_lig:
+            msg.append(f"Only in ligand (showing up to 20): {only_lig[:20]}")
+        if only_pro:
+            msg.append(f"Only in protein (showing up to 20): {only_pro[:20]}")
+        raise RuntimeError(" \n".join(msg))
+        
+    ids = sorted(lig_ids.intersection(pro_ids))
+    for tid in tqdm(ids, total=len(ids), desc="Build merge tasks", file=sys.stdout):
+        lig_pt = os.path.join(lig_dir, f"{tid}.pt")
+        pro_pt = os.path.join(pro_dir, f"{tid}.pt")
+        out_pt = os.path.join(merged_data_path_root, f"{tid}.pt")
+        tasks.append((tid, lig_pt, pro_pt, out_pt, connect_cross, r_cut))
+
+    ok = skipped = failed = 0
+    ctx = get_context("spawn")
+    with ctx.Pool(
+        processes=num_workers,
+        initializer=worker_init,
+        maxtasksperchild=max_tasks_per_child,
+    ) as pool:
+
+        iterator = pool.imap_unordered(merge_from_precomputed, tasks, chunksize=chunksize)
+
+        for tid, status, msg in tqdm(
+            iterator,
+            total=len(tasks),
+            file=sys.stdout,
+            mininterval=0.2,
+            smoothing=0,
+            dynamic_ncols=True,
+        ):
+            if status == "ok":
+                ok += 1
+            elif status == "skip":
+                skipped += 1
+            else:
+                failed += 1
+                logger.error(f"{tid} failed: {msg}")
+            sys.stdout.flush()
+            sys.stderr.flush()
+    
+    logger.info(f"Finished. ok={ok}, skipped={skipped}, failed={failed}, total={len(tasks)}")
+    logger.info("Program finished.")
+    
+
+
 
 if __name__ == "__main__":
 
@@ -421,11 +496,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    lig_dir = os.path.join(args.out_root, "ligand")
-    pro_dir = os.path.join(args.out_root, "protein")
-    os.makedirs(lig_dir, exist_ok=True)
-    os.makedirs(pro_dir, exist_ok=True)
-
     # Logger writing only from main process
     log_path = "/data2/home/kgb24/topological-equivariant-networks/precompute.log"
     logging.basicConfig(
@@ -433,7 +503,12 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
-    logger = logging.getLogger("precompute")
+    logger = logging.getLogger("preprocess")
+
+    lig_dir = os.path.join(args.out_root, "ligand")
+    pro_dir = os.path.join(args.out_root, "protein")
+    os.makedirs(lig_dir, exist_ok=True)
+    os.makedirs(pro_dir, exist_ok=True)
 
     tasks = []
     if args.phase == "build":
