@@ -13,6 +13,7 @@ import torch
 # Class imports
 from etnn.lifter import Lifter, get_adjacency_types, CombinatorialComplexTransform
 from etnn.bindingnet.lifts.registry import LIFTER_REGISTRY
+from preprocess.single_graph_processing import create_graphs_from_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class BindingNetCC(InMemoryDataset):
         connectivity: str,
         connect_cross: bool = False,
         r_cut: float = 5.0,
+        merge_graphs: bool = False,
+        preprocessed_graphs_path: str = "data/bindingnetcc/subset_20p_base_graphs/preprocessed",
         # merge_neighbors: str,
         supercell: Optional[bool] = False,
         transform: Optional[Callable] = None,
@@ -37,6 +40,8 @@ class BindingNetCC(InMemoryDataset):
         **lifter_kwargs,
     ) -> None:
         self.index = index
+        self.merge_graphs = merge_graphs
+        self.preprocessed_graphs_path = preprocessed_graphs_path
         self.lifters = lifters
         self.neighbor_types = neighbor_types
         self.connectivity = connectivity
@@ -62,6 +67,7 @@ class BindingNetCC(InMemoryDataset):
         super().__init__(
             root, transform, pre_transform, pre_filter, force_reload=force_reload
         )
+        # self.root e.g: data/bindingnetcc/subset_20p_crossconnect_rcut3
         self.load(self.processed_paths[0])
 
     @property
@@ -79,21 +85,27 @@ class BindingNetCC(InMemoryDataset):
         )
 
         # Path for merged data
-        if self.supercell:
-            supercell_str = 'supercell'
-        else:
-            supercell_str = 'no_supercell'
-        if self.connect_cross:
-            r_cut_str = f'r_cut_{self.r_cut}'
-            connect_cross_str = 'connect_cross_' + r_cut_str
-        else:
-            connect_cross_str = 'no_connect_cross'
-        if self.connectivity == 'all':
-            connectivity_str = 'all'
-        else:
-            connectivity_str = 'no_all'
-        dataset_modifications = f'{supercell_str}_{connect_cross_str}_{connectivity_str}'
-        merged_data_path_root = os.path.join(self.root, f'preprocessed/merged/{dataset_modifications}')
+        #if self.supercell:
+        #    supercell_str = 'supercell'
+        #else:
+        #    supercell_str = 'no_supercell'
+        #if self.connect_cross:
+        #    r_cut_str = f'r_cut_{self.r_cut}'
+        #    connect_cross_str = 'connect_cross_' + r_cut_str
+        #else:
+        #    connect_cross_str = 'no_connect_cross'
+        #dataset_modifications = f'{supercell_str}_{connect_cross_str}_{self.connectivity}'
+        merged_data_path_root = os.path.join(self.root, f'preprocessed/merged')
+
+        if self.merge_graphs:
+            logger.info("Creating merged graphs from existing ligand and protein graphs")
+            create_graphs_from_dataset(
+                df, 
+                self.preprocessed_graphs_path, 
+                merged_data_path_root,
+                self.connect_cross,
+                self.r_cut
+            ) # creates graphs and stores them in merged_data_path_root
 
         for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing BindingNetCC"):
             tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
@@ -118,6 +130,7 @@ class BindingNetCC(InMemoryDataset):
             merged_list.append(merged_data)
 
         self.save(merged_list, self.processed_paths[0])
+        # self.processed_paths[0] e.g: data/bindingnetcc/subset_20p_crossconnect_rcut3/processed/merged_lifted.pt
 
 
 

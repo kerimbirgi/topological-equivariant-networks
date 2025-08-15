@@ -20,6 +20,7 @@ def main(cfg: DictConfig):
         connect_cross=cfg.dataset.connect_cross,
         r_cut=cfg.dataset.r_cut,
         force_reload=cfg.force_reload if 'force_reload' in cfg else False,
+        merge_graphs=cfg.dataset.merge_graphs if 'merge_graphs' in cfg.dataset else False
     )
     logger.info(f"Lifted BindingNet dataset generated and stored in '{dataset.root}'.")
 
