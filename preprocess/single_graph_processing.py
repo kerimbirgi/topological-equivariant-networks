@@ -233,8 +233,28 @@ def merge_ligand_and_protein(
     edge_index_lig = ligand.edge_index                     # already fine
     edge_index_pro = protein.edge_index + prot_shift       # shifted
 
+    # Add edge type features (one-hot encoding)
+    # Dynamic encoding based on connect_cross flag:
+    # connect_cross=False: [intra_ligand, intra_protein]
+    # connect_cross=True:  [intra_ligand, intra_protein, inter_molecular]
+    num_lig_edges = ligand.edge_attr.size(0)
+    num_pro_edges = protein.edge_attr.size(0)
+    
+    if connect_cross:
+        # 3-way encoding: [intra_ligand, intra_protein, inter_molecular]
+        lig_type = torch.tensor([[1, 0, 0]], dtype=torch.float).repeat(num_lig_edges, 1)
+        pro_type = torch.tensor([[0, 1, 0]], dtype=torch.float).repeat(num_pro_edges, 1)
+    else:
+        # 2-way encoding: [intra_ligand, intra_protein]
+        lig_type = torch.tensor([[1, 0]], dtype=torch.float).repeat(num_lig_edges, 1)
+        pro_type = torch.tensor([[0, 1]], dtype=torch.float).repeat(num_pro_edges, 1)
+    
+    # Concatenate original edge features with type features
+    ligand_edge_attr_enhanced = torch.cat([ligand.edge_attr, lig_type], dim=1)
+    protein_edge_attr_enhanced = torch.cat([protein.edge_attr, pro_type], dim=1)
+
     edge_index = torch.cat([edge_index_lig, edge_index_pro], dim=1)
-    edge_attr  = torch.cat([ligand.edge_attr, protein.edge_attr], dim=0)
+    edge_attr  = torch.cat([ligand_edge_attr_enhanced, protein_edge_attr_enhanced], dim=0)
 
     origin_edges = torch.cat([
         torch.zeros(ligand.edge_index.size(1),  dtype=torch.long),  # ligand
@@ -255,9 +275,19 @@ def merge_ligand_and_protein(
         cross_edge_index = torch.stack([src_idx, dst_idx], dim=0)
         rev_edge_index   = torch.flip(cross_edge_index, [0])        # undirected
 
-        # very simple cross-edge feature: distance only (1-dim)
+        # Cross-edge features: distance + edge type
         dist = d[src, dst][:, None]            # (E_cross,1)
-        cross_attr = dist.repeat(1, edge_attr.size(1))     # pad to same dim
+        # Pad distance to match original edge feature dimensions (without edge type)
+        original_edge_feat_dim = ligand.edge_attr.size(1)
+        cross_attr_base = torch.cat([
+            dist,
+            torch.zeros(dist.size(0), original_edge_feat_dim - 1)
+        ], dim=1)
+        
+        # Add edge type for cross edges: [0, 0, 1] = inter_molecular
+        # (This only happens when connect_cross=True, so we always use 3-way encoding here)
+        cross_type = torch.tensor([[0, 0, 1]], dtype=torch.float).repeat(cross_attr_base.size(0), 1)
+        cross_attr = torch.cat([cross_attr_base, cross_type], dim=1)
 
         edge_index = torch.cat([edge_index, cross_edge_index, rev_edge_index], dim=1)
         edge_attr  = torch.cat([edge_attr,  cross_attr,     cross_attr],     dim=0)
