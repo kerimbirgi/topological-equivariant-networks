@@ -8,6 +8,20 @@ def visualize_3d(pos, edge_index, labels=None, title="Graph"):
         import plotly.graph_objects as go
         import numpy as np
 
+        notebook_env = False
+        try: # find out if in notebook environment
+            from IPython.core.getipython import get_ipython
+            ipython = get_ipython()
+            if ipython is not None:
+                notebook_env = True
+
+                import plotly.offline as pyo
+                pyo.init_notebook_mode(connected=True)
+                print("using notebook visualization method")
+        except:
+            print("using browser visualization method")
+            notebook_env = False
+
         xyz = pos.cpu().numpy()
         edges = edge_index.t().contiguous().cpu().numpy()
 
@@ -32,7 +46,14 @@ def visualize_3d(pos, edge_index, labels=None, title="Graph"):
 
         fig = go.Figure([edge_trace, node_trace])
         fig.update_layout(title=title, scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"))
-        fig.show(renderer="browser")
+
+
+        if notebook_env:
+            pyo.iplot(fig)
+        else:
+            fig.show(renderer="broswer")
+            
+        
     except Exception as e:
         print(f"3D visualization error: {e}")
 
@@ -142,18 +163,15 @@ def infer_labels(g):
         pass
     return None
 
+def visualize_pt_graph(path, mode):
+    if mode not in ["2d", "3d"]:
+        raise KeyError("mode needs to be either 2d or 3d")
 
-def main():
-    parser = argparse.ArgumentParser(description="Visualize a PyG .pt graph (ligand/protein/merged)")
-    parser.add_argument("--path", required=True, help="Path to a .pt file (single Data object)")
-    parser.add_argument("--mode", choices=["2d", "3d"], default="3d", help="Visualization mode")
-    args = parser.parse_args()
-
-    pt_path = os.path.abspath(args.path)
+    pt_path = os.path.abspath(path)
     if not os.path.isfile(pt_path):
         raise FileNotFoundError(f"No such file: {pt_path}")
 
-    g = torch.load(pt_path, map_location="cpu", weights_only=False)
+    g = torch.load(pt_path, weights_only=False)
 
     # Expecting a torch_geometric.data.Data-like object
     if not hasattr(g, "pos") or not hasattr(g, "edge_index"):
@@ -167,10 +185,20 @@ def main():
     # Print concise feature/shape info
     describe_graph_features(g)
 
-    if args.mode == "3d":
+    if mode == "3d":
         visualize_3d(pos, edge_index, labels, title)
     else:
         visualize_2d(pos, edge_index, labels, title)
+        
+    return
+
+def main():
+    parser = argparse.ArgumentParser(description="Visualize a PyG .pt graph (ligand/protein/merged)")
+    parser.add_argument("--path", required=True, help="Path to a .pt file (single Data object)")
+    parser.add_argument("--mode", choices=["2d", "3d"], default="3d", help="Visualization mode")
+    args = parser.parse_args()
+
+    visualize_pt_graph(args.path, args.mode)
 
 
 if __name__ == "__main__":
