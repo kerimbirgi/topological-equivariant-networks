@@ -36,15 +36,11 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     preds = torch.cat(preds_cpu)   # on CPU
     targets = torch.cat(targets_cpu)  # on CPU
 
-    # Denormalize on CPU only if normalization was used
-    if cfg.training.normalize_targets:
-        logging.info("Using normalized targets")
-        mean_cpu = mean.detach().cpu()
-        mad_cpu = mad.detach().cpu()
-        denorm_preds = preds * mad_cpu + mean_cpu
-    else:
-        logging.info("Using unnormalized targets")
-        denorm_preds = preds
+    # Always denormalize predictions for evaluation (since we always normalize during training)
+    logging.info("Denormalizing predictions for evaluation")
+    mean_cpu = mean.detach().cpu()
+    mad_cpu = mad.detach().cpu()
+    denorm_preds = preds * mad_cpu + mean_cpu
 
     # Save predictions/targets to CSV as plain numeric arrays
     df = pd.DataFrame({
@@ -71,6 +67,7 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     logger.info(f"Test RMSE: {rmse.item()}")
     logger.info(f"Predictions range: {predictions_range}")
     logger.info(f"Targets range: {targets_range}")
+    logger.info(f"Normalization parameters - MAD: {mad_cpu}, Mean: {mean_cpu}")
 
 
 @hydra.main(config_path="conf/conf_bindingnet", config_name="config", version_base=None)
@@ -272,16 +269,16 @@ def main(cfg: DictConfig):
 
         sched.step()
         model.eval()
-        for _, batch in enumerate(valid_dataloader):
-            batch = batch.to(device)
-            pred = model(batch)
-            
-            if cfg.training.normalize_targets:
-                mae = crit(pred * mad + mean, batch.y)
-            else:
-                mae = crit(pred, batch.y)
+        with torch.inference_mode():
+            for _, batch in enumerate(valid_dataloader):
+                batch = batch.to(device)
+                pred = model(batch)
+                
+                # Always denormalize for proper validation metrics (since we always normalize during training)
+                denorm_pred = pred * mad + mean
 
-            epoch_mae_val += mae.item()
+                mae = crit(denorm_pred, batch.y)
+                epoch_mae_val += mae.item()
 
         epoch_mae_train /= len(train_dataloader)
         epoch_mae_val /= len(valid_dataloader)
@@ -320,6 +317,29 @@ def main(cfg: DictConfig):
         )
         epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val)
 
+    # Save final checkpoint
+    logger.info("Saving final checkpoint...")
+    utils.save_checkpoint(
+        path=checkpoint_path,
+        model=model,
+        best_model=best_model,
+        best_loss=best_loss,
+        opt=opt,
+        sched=sched,
+        epoch=cfg.training.epochs - 1,
+        run_id=run_id,
+    )
+
+    # ==== Final test evaluation after training completion ====
+    logger.info("Training completed. Running final evaluation on test set...")
+
+    logger.info("Running evaluation with current model")
+    evaluate(cfg, model, test_dataloader, device, mad, mean)
+
+    logger.info("Running evaluation with best model")
+    evaluate(cfg, best_model, test_dataloader, device, mad, mean)
+    
+    logger.info("Training and evaluation completed successfully!")
 
 
 if __name__ == "__main__":
