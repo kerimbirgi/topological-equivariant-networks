@@ -139,6 +139,7 @@ class BindingNetCC(InMemoryDataset):
             merged_list.append(merged_data)
 
         self.save(merged_list, self.processed_paths[0])
+        logger.info(f"saved {len(merged_list)} graphs to {self.processed_paths[0]}")
         # self.processed_paths[0] e.g: data/bindingnetcc/subset_20p_crossconnect_rcut3/processed/merged_lifted.pt
 
 
