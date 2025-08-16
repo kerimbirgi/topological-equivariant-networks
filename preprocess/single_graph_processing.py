@@ -12,6 +12,8 @@ import sys
 #from rdkit.Chem import rdFreeSASA
 #from rdkit.Chem import Crippen
 
+logger = logging.getLogger(__name__)
+
 """
 # Build feature factory once
 fdef = os.path.join(RDConfig.RDDataDir, "BaseFeatures.fdef")
@@ -28,9 +30,24 @@ def donor_acceptor_masks(mol):
 """
 
 HYB_TYPES = ['UNSPECIFIED','S','SP','SP2','SP3','SP3D','SP3D2']
-#BOND_TYPES  = ['SINGLE','DOUBLE','TRIPLE','AROMATIC']
-# Bond type to index mapping (used for one-hot)
-BOND_TYPES = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
+# Bond type to index mapping (used for one-hot encoding)
+# Covers the most common bond types encountered in molecular data
+BOND_TYPES = {
+    BT.SINGLE: 0,      # Standard single bond
+    BT.DOUBLE: 1,      # Standard double bond  
+    BT.TRIPLE: 2,      # Standard triple bond
+    BT.AROMATIC: 3,    # Aromatic bond
+    BT.ONEANDAHALF: 4, # 1.5 bond (common in resonance structures)
+    BT.TWOANDAHALF: 5, # 2.5 bond
+    BT.UNSPECIFIED: 6  # Fallback for unknown/unspecified bonds
+}
+
+# Fallback bond type for any bonds not in BOND_TYPES
+FALLBACK_BOND_TYPE = BT.UNSPECIFIED
+
+# Expected feature dimensions for validation
+EXPECTED_NODE_FEATURES = 13  # 6 basic atom properties + 7 hybridization one-hot
+EXPECTED_EDGE_FEATURES = 10  # 7 bond types + is_conj + in_ring + length
 
 
 
@@ -97,9 +114,9 @@ def process_ligand_sdf(sdf_path: str) -> Data:
         rows += [start, end]
         cols += [end, start]
 
-        # Bond-type one-hot
-        bt_idx  = BOND_TYPES[bond.GetBondType()]
-        bt_oh   = [int(i == bt_idx) for i in range(len(BOND_TYPES))]
+        # Bond-type one-hot (safe lookup with fallback to UNSPECIFIED)
+        bt_idx = BOND_TYPES.get(bond.GetBondType(), BOND_TYPES[FALLBACK_BOND_TYPE])
+        bt_oh = [int(i == bt_idx) for i in range(len(BOND_TYPES))]
         #edge_types += 2 * [BOND_TYPES[bond.GetBondType()]]
 
         # conjugation flag
@@ -117,11 +134,34 @@ def process_ligand_sdf(sdf_path: str) -> Data:
         
 
     edge_index = torch.tensor([rows, cols], dtype=torch.long)  # [2, E]
-    edge_attr  = torch.tensor(edge_feat_list, dtype=torch.float32)
+    
+    # Handle case where molecule has no bonds
+    if len(edge_feat_list) == 0:
+        # Create empty tensor with correct feature dimension
+        edge_attr = torch.empty(0, EXPECTED_EDGE_FEATURES, dtype=torch.float32)
+    else:
+        edge_attr = torch.tensor(edge_feat_list, dtype=torch.float32)
 
     perm = (edge_index[0] * mol.GetNumAtoms() + edge_index[1]).argsort()
     edge_index = edge_index[:, perm]
     edge_attr  = edge_attr[perm]
+
+    # Validation: Check expected dimensions
+    if x.shape[1] != EXPECTED_NODE_FEATURES:
+        logger.warning(f"Ligand {sdf_path}: Expected {EXPECTED_NODE_FEATURES} node features, got {x.shape[1]}")
+        raise ValueError(f"Ligand node feature dimension mismatch: expected {EXPECTED_NODE_FEATURES}, got {x.shape[1]}")
+    
+    if edge_attr.shape[0] > 0 and edge_attr.shape[1] != EXPECTED_EDGE_FEATURES:
+        logger.warning(f"Ligand {sdf_path}: Expected {EXPECTED_EDGE_FEATURES} edge features, got {edge_attr.shape[1]}")
+        raise ValueError(f"Ligand edge feature dimension mismatch: expected {EXPECTED_EDGE_FEATURES}, got {edge_attr.shape[1]}")
+    
+    if x.shape[0] == 0:
+        logger.warning(f"Ligand {sdf_path}: No atoms in molecule")
+        raise ValueError("Ligand has no atoms")
+    
+    if pos.shape != (x.shape[0], 3):
+        logger.warning(f"Ligand {sdf_path}: Position shape mismatch, expected ({x.shape[0]}, 3), got {pos.shape}")
+        raise ValueError(f"Ligand position shape mismatch: expected ({x.shape[0]}, 3), got {pos.shape}")
 
     return Data(
         x=x,
@@ -165,8 +205,8 @@ def process_protein_pdb_ligand_style(pdb_path: str) -> Data:
         start, end = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
         rows += [start, end]
         cols += [end, start]
-        bt_idx = BOND_TYPES.get(bond.GetBondType(), 0)
-        bt_oh  = [int(i == bt_idx) for i in range(len(BOND_TYPES))]
+        bt_idx = BOND_TYPES.get(bond.GetBondType(), BOND_TYPES[FALLBACK_BOND_TYPE])
+        bt_oh = [int(i == bt_idx) for i in range(len(BOND_TYPES))]
         is_conj = [int(bond.GetIsConjugated())]
         ring_flag = [int(bond.IsInRing())]
         p1, p2 = conf.GetAtomPosition(start), conf.GetAtomPosition(end)
@@ -175,7 +215,13 @@ def process_protein_pdb_ligand_style(pdb_path: str) -> Data:
         edge_feat_list += [feats, feats]
 
     edge_index = torch.tensor([rows, cols], dtype=torch.long)
-    edge_attr  = torch.tensor(edge_feat_list, dtype=torch.float32)
+    
+    # Handle case where molecule has no bonds
+    if len(edge_feat_list) == 0:
+        # Create empty tensor with correct feature dimension
+        edge_attr = torch.empty(0, EXPECTED_EDGE_FEATURES, dtype=torch.float32)
+    else:
+        edge_attr = torch.tensor(edge_feat_list, dtype=torch.float32)
 
     perm = (edge_index[0] * mol.GetNumAtoms() + edge_index[1]).argsort()
     edge_index = edge_index[:, perm]
@@ -184,6 +230,23 @@ def process_protein_pdb_ligand_style(pdb_path: str) -> Data:
     pos = torch.tensor([[conf.GetAtomPosition(i).x,
                          conf.GetAtomPosition(i).y,
                          conf.GetAtomPosition(i).z] for i in range(mol.GetNumAtoms())], dtype=torch.float32)
+
+    # Validation: Check expected dimensions
+    if x.shape[1] != EXPECTED_NODE_FEATURES:
+        logger.warning(f"Protein {pdb_path}: Expected {EXPECTED_NODE_FEATURES} node features, got {x.shape[1]}")
+        raise ValueError(f"Protein node feature dimension mismatch: expected {EXPECTED_NODE_FEATURES}, got {x.shape[1]}")
+    
+    if edge_attr.shape[0] > 0 and edge_attr.shape[1] != EXPECTED_EDGE_FEATURES:
+        logger.warning(f"Protein {pdb_path}: Expected {EXPECTED_EDGE_FEATURES} edge features, got {edge_attr.shape[1]}")
+        raise ValueError(f"Protein edge feature dimension mismatch: expected {EXPECTED_EDGE_FEATURES}, got {edge_attr.shape[1]}")
+    
+    if x.shape[0] == 0:
+        logger.warning(f"Protein {pdb_path}: No atoms in molecule")
+        raise ValueError("Protein has no atoms")
+    
+    if pos.shape != (x.shape[0], 3):
+        logger.warning(f"Protein {pdb_path}: Position shape mismatch, expected ({x.shape[0]}, 3), got {pos.shape}")
+        raise ValueError(f"Protein position shape mismatch: expected ({x.shape[0]}, 3), got {pos.shape}")
 
     return Data(x=x, pos=pos, edge_index=edge_index, edge_attr=edge_attr)
 
@@ -249,9 +312,18 @@ def merge_ligand_and_protein(
         lig_type = torch.tensor([[1, 0]], dtype=torch.float).repeat(num_lig_edges, 1)
         pro_type = torch.tensor([[0, 1]], dtype=torch.float).repeat(num_pro_edges, 1)
     
-    # Concatenate original edge features with type features
+    # Concatenate original edge features with type features (dimensions should now be consistent)
     ligand_edge_attr_enhanced = torch.cat([ligand.edge_attr, lig_type], dim=1)
     protein_edge_attr_enhanced = torch.cat([protein.edge_attr, pro_type], dim=1)
+    
+    # Debug: Check for any remaining dimension mismatches
+    if ligand_edge_attr_enhanced.size(1) != protein_edge_attr_enhanced.size(1):
+        raise ValueError(
+            f"Edge feature dimension mismatch after fixes: "
+            f"ligand={ligand_edge_attr_enhanced.size(1)} vs protein={protein_edge_attr_enhanced.size(1)}. "
+            f"Original ligand edge_attr: {ligand.edge_attr.size(1)}, "
+            f"Original protein edge_attr: {protein.edge_attr.size(1)}"
+        )
 
     edge_index = torch.cat([edge_index_lig, edge_index_pro], dim=1)
     edge_attr  = torch.cat([ligand_edge_attr_enhanced, protein_edge_attr_enhanced], dim=0)
