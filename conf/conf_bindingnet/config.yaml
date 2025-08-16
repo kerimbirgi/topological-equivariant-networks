@@ -50,7 +50,7 @@ training:
   weight_decay: 1e-16
   min_lr: 0.0
   num_lr_cycles: 3
-  clip_gradients: false
+  clip_gradients: true
   clip_amount: 1.0
   test_interval: 10
   lr: 5e-4

@@ -1,0 +1,6 @@
+# @package _global_
+model:
+  num_hidden: 128
+
+training:
+  clip_gradients: true
