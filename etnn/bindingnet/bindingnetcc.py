@@ -46,7 +46,7 @@ class BindingNetCC(InMemoryDataset):
         self.neighbor_types = neighbor_types
         self.connectivity = connectivity
         self.connect_cross = connect_cross
-        self.r_cut = r_cut
+        self.r_cut = r_cut if connect_cross else 0.0
         self.supercell = supercell
         self.dim = len(lifters) - 1
 
@@ -75,7 +75,13 @@ class BindingNetCC(InMemoryDataset):
         return ["merged_lifted.pt"]
 
     def process(self) -> None:
+        logger.info(f"Starting BindingNetCC processing for {self.root}")
+        logger.info(f"Index file: {self.index}")
+        logger.info(f"Merge graphs enabled: {self.merge_graphs}")
+        logger.info(f"Connect cross: {self.connect_cross}, R_cut: {self.r_cut}")
+        
         df = pd.read_csv(self.index)
+        logger.info(f"Loaded index with {len(df)} entries")
 
         merged_list = []
 
@@ -83,6 +89,7 @@ class BindingNetCC(InMemoryDataset):
             lifter=self.lifter,
             adjacencies=self.adjacencies,
         )
+        logger.info(f"Created CombinatorialComplexTransform with lifters: {self.lifters}")
 
         # Path for merged data
         #if self.supercell:
@@ -96,6 +103,7 @@ class BindingNetCC(InMemoryDataset):
         #    connect_cross_str = 'no_connect_cross'
         #dataset_modifications = f'{supercell_str}_{connect_cross_str}_{self.connectivity}'
         merged_data_path_root = os.path.join(self.root, f'preprocessed/merged')
+        logger.info(f"Merged data path: {merged_data_path_root}")
 
         if self.merge_graphs:
             logger.info("Creating merged graphs from existing ligand and protein graphs")
