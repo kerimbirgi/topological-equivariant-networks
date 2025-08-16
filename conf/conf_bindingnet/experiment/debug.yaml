@@ -1,0 +1,12 @@
+# @package _global_
+use_single_batch: false
+
+model:
+  num_hidden: 128
+  dropout: 0
+
+training:
+  clip_gradients: false
+  epochs: 2000
+  weight_decay: 0
+  lr: 5e-4

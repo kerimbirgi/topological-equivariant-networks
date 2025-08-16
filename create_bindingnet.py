@@ -23,7 +23,7 @@ def main(cfg: DictConfig):
     logger.info("Starting BindingNet dataset creation")
     logger.info(f"Dataset: {cfg.dataset}")
     logger.info(f"Merge graphs: {cfg.dataset.merge_graphs}")
-    logger.info(f"Force reload: {cfg.force_reload}")
+    logger.info(f"Force reload: {cfg.dataset.force_reload}")
     
     dataset = BindingNetCC(
         index=cfg.dataset.index,
@@ -34,7 +34,7 @@ def main(cfg: DictConfig):
         supercell=cfg.dataset.supercell,
         connect_cross=cfg.dataset.connect_cross,
         r_cut=cfg.dataset.r_cut,
-        force_reload=cfg.force_reload if 'force_reload' in cfg else False,
+        force_reload=cfg.dataset.force_reload if 'force_reload' in cfg.dataset else False,
         merge_graphs=cfg.dataset.merge_graphs if 'merge_graphs' in cfg.dataset else False
     )
     

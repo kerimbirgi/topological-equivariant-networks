@@ -393,7 +393,7 @@ def create_graphs_from_dataset(
                 merged_data_path_root: str,
                 connect_cross: bool,
                 r_cut: float,
-                num_workers: int = 4,
+                num_workers: int = 1,
                 chunksize: int = 8,
                 max_tasks_per_child: int = 10,
             ): 
@@ -405,6 +405,12 @@ def create_graphs_from_dataset(
     """
     logger = logging.getLogger(__name__)
 
+    # ids from dataframe
+    t = df['Target ChEMBLID'].astype(str).str.strip()
+    l = df['Molecule ChEMBLID'].astype(str).str.strip()
+    df_ids = set((t + '_' + l).unique())
+
+    # seperate graph dirs checks
     lig_dir = os.path.join(preprocessed_graphs_path, "ligand")
     pro_dir = os.path.join(preprocessed_graphs_path, "protein")
 
@@ -431,7 +437,9 @@ def create_graphs_from_dataset(
         raise RuntimeError(" \n".join(msg))
         
     tasks = []
-    ids = sorted(lig_ids.intersection(pro_ids))
+    #pair_ids = sorted(lig_ids.intersection(pro_ids))
+    pair_ids = lig_ids & pro_ids
+    ids = sorted(pair_ids & df_ids)
     for tid in tqdm(ids, total=len(ids), desc="Build merge tasks", file=sys.stdout):
         lig_pt = os.path.join(lig_dir, f"{tid}.pt")
         pro_pt = os.path.join(pro_dir, f"{tid}.pt")
@@ -439,23 +447,14 @@ def create_graphs_from_dataset(
         tasks.append((tid, lig_pt, pro_pt, out_pt, connect_cross, r_cut))
 
     ok = skipped = failed = 0
-    ctx = get_context("spawn")
-    with ctx.Pool(
-        processes=num_workers,
-        initializer=worker_init,
-        maxtasksperchild=max_tasks_per_child,
-    ) as pool:
 
-        iterator = pool.imap_unordered(merge_from_precomputed, tasks, chunksize=chunksize)
-
-        for tid, status, msg in tqdm(
-            iterator,
-            total=len(tasks),
-            file=sys.stdout,
-            mininterval=0.2,
-            smoothing=0,
-            dynamic_ncols=True,
-        ):
+    if num_workers == 1:
+        print("Creating merged graphs sequentially")
+        for task in tqdm(tasks, total=len(tasks), file=sys.stdout,
+                         mininterval=0.2, smoothing=0, dynamic_ncols=True,
+                         desc="Merging graphs (sequential)"):
+            # merge_from_precomputed is called the same way as in pool.map (single tuple arg)
+            tid, status, msg = merge_from_precomputed(task)
             if status == "ok":
                 ok += 1
             elif status == "skip":
@@ -465,9 +464,37 @@ def create_graphs_from_dataset(
                 logger.error(f"{tid} failed: {msg}")
             sys.stdout.flush()
             sys.stderr.flush()
+    else:
+        print(f"Creating merged graphs parallel with {num_workers} workers")
+        ctx = get_context("spawn")
+        with ctx.Pool(
+            processes=num_workers,
+            initializer=worker_init,
+            maxtasksperchild=max_tasks_per_child,
+        ) as pool:
+    
+            iterator = pool.imap_unordered(merge_from_precomputed, tasks, chunksize=chunksize)
+    
+            for tid, status, msg in tqdm(
+                iterator,
+                total=len(tasks),
+                file=sys.stdout,
+                mininterval=0.2,
+                smoothing=0,
+                dynamic_ncols=True,
+            ):
+                if status == "ok":
+                    ok += 1
+                elif status == "skip":
+                    skipped += 1
+                else:
+                    failed += 1
+                    logger.error(f"{tid} failed: {msg}")
+                sys.stdout.flush()
+                sys.stderr.flush()
     
     logger.info(f"Finished. ok={ok}, skipped={skipped}, failed={failed}, total={len(tasks)}")
-    logger.info("Program finished.")
+    logger.info("Merged graphs creation finished.")
     
 
 

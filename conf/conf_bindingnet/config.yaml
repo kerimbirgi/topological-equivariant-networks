@@ -16,7 +16,8 @@ dataset:
   use_postprocessed: true
   merge_graphs: false
   connect_cross: false
-  r_cut: 3
+  r_cut: 0
+  force_reload: false
 
 
 task_name: BindingNet
@@ -24,7 +25,6 @@ dataset_name: ${hydra:runtime.choices.dataset}
 experiment_name: ${hydra:runtime.choices.experiment}
 results_dir: results
 eval_only: false
-force_reload: false
 
 compile: false
 seed: 42
@@ -56,4 +56,3 @@ training:
   lr: 5e-4
   save_interval: 10
   lambdalr: false
-  normalize_targets: true
