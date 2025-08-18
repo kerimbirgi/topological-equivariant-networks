@@ -507,7 +507,10 @@ def create_graphs_from_dataset(
         if only_pro:
             msg.append(f"Only in protein (showing up to 20): {only_pro[:20]}")
         raise RuntimeError(" \n".join(msg))
-        
+
+    # Print graph creation config for info
+    logger.info(f"Cross connect: {connect_cross}, r_cut: {r_cut}")
+    
     tasks = []
     #pair_ids = sorted(lig_ids.intersection(pro_ids))
     pair_ids = lig_ids & pro_ids
@@ -577,17 +580,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--index", 
         type=str, 
-        default="/data2/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
+        default="/rds/general/user/kgb24/ephemeral/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
     )
     parser.add_argument(
         "--num_workers", 
         type=int, 
-        default=25
+        default=1
     )
     parser.add_argument(
         "--chunksize", 
         type=int, 
-        default=1
+        default=8
     )
     parser.add_argument(
         "--phase",
@@ -603,8 +606,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--out_root", 
-        type=str, 
-        default="/data2/home/kgb24/topological-equivariant-networks/data/bindingnetcc/subset_20p/preprocessed"
+        type=str,
+        default="/rds/general/user/kgb24/home/topological-equivariant-networks/data/bindingnetcc/subset_20p_base_graphs/preprocessed"
     )
     parser.add_argument(
         "--connect_cross",
@@ -617,17 +620,26 @@ if __name__ == "__main__":
         default=5.0,
         help="Distance cutoff for cross edges in merge phase",
     )
+    parser.add_argument(
+        "--log_path",
+        type=str,
+        default="/rds/general/user/kgb24/home/topological-equivariant-networks/logs/single_graphs_processing.log"
+    )
     args = parser.parse_args()
 
     # Logger writing only from main process
-    log_path = "/data2/home/kgb24/topological-equivariant-networks/precompute.log"
+    log_path = args.log_path
     logging.basicConfig(
-        filename=log_path,
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, mode="w"),
+            logging.StreamHandler()
+        ]
     )
-    logger = logging.getLogger("preprocess")
+    logger = logging.getLogger(__name__)
 
+    os.makedirs(args.out_root, exist_ok=True)
     lig_dir = os.path.join(args.out_root, "ligand")
     pro_dir = os.path.join(args.out_root, "protein")
     os.makedirs(lig_dir, exist_ok=True)
@@ -677,25 +689,17 @@ if __name__ == "__main__":
             tasks.append((tid, lig_pt, pro_pt, out_pt, args.connect_cross, args.r_cut))
     
     ok = skipped = failed = 0
-    ctx = get_context("spawn")
-    with ctx.Pool(
-        processes=args.num_workers,
-        initializer=worker_init,
-        maxtasksperchild=args.max_tasks_per_child,
-    ) as pool:
-        if args.phase == "build":
-            iterator = pool.imap_unordered(build_and_save_pair, tasks, chunksize=args.chunksize)
-        else:
-            iterator = pool.imap_unordered(merge_from_precomputed, tasks, chunksize=args.chunksize)
+    if args.num_workers == 1:
+        print("Creating merged graphs sequentially")
+        for task in tqdm(tasks, total=len(tasks), file=sys.stdout,
+                         mininterval=0.2, smoothing=0, dynamic_ncols=True,
+                         desc="Merging graphs (sequential)"):
+            # merge_from_precomputed is called the same way as in pool.map (single tuple arg)
+            if args.phase == "build":
+                tid, status, msg = build_and_save_pair(task)
+            else:
+                tid, status, msg = merge_from_precomputed(task)
 
-        for tid, status, msg in tqdm(
-            iterator,
-            total=len(tasks),
-            file=sys.stdout,
-            mininterval=0.2,
-            smoothing=0,
-            dynamic_ncols=True,
-        ):
             if status == "ok":
                 ok += 1
             elif status == "skip":
@@ -705,6 +709,35 @@ if __name__ == "__main__":
                 logger.error(f"{tid} failed: {msg}")
             sys.stdout.flush()
             sys.stderr.flush()
+    else:
+        ctx = get_context("spawn")
+        with ctx.Pool(
+            processes=args.num_workers,
+            initializer=worker_init,
+            maxtasksperchild=args.max_tasks_per_child,
+        ) as pool:
+            if args.phase == "build":
+                iterator = pool.imap_unordered(build_and_save_pair, tasks, chunksize=args.chunksize)
+            else:
+                iterator = pool.imap_unordered(merge_from_precomputed, tasks, chunksize=args.chunksize)
+
+            for tid, status, msg in tqdm(
+                iterator,
+                total=len(tasks),
+                file=sys.stdout,
+                mininterval=0.2,
+                smoothing=0,
+                dynamic_ncols=True,
+            ):
+                if status == "ok":
+                    ok += 1
+                elif status == "skip":
+                    skipped += 1
+                else:
+                    failed += 1
+                    logger.error(f"{tid} failed: {msg}")
+                sys.stdout.flush()
+                sys.stderr.flush()
     
     logger.info(f"Finished. ok={ok}, skipped={skipped}, failed={failed}, total={len(tasks)}")
     logger.info("Program finished.")
