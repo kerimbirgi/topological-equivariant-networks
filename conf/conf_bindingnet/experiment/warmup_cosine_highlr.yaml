@@ -1,0 +1,13 @@
+# @package _global_
+model:
+  num_hidden: 128
+
+training:
+  batch_size: 32
+  weight_decay: 1e-5
+  clip_gradients: true
+  clip_amount: 2.0
+  scheduler: 'cosine_warmup'
+  num_lr_cycles: 1
+  min_lr: 0.0
+  lr: 3e-4
