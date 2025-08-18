@@ -173,25 +173,61 @@ def main(cfg: DictConfig):
     crit = torch.nn.L1Loss(reduction="mean")
     opt_kwargs = dict(lr=cfg.training.lr, weight_decay=cfg.training.weight_decay)
     opt = torch.optim.Adam(model.parameters(), **opt_kwargs)
-    if cfg.training.lambdalr:
-        print("using lambdalr")
-        warm_epochs = 5                       # 5 % of 100 epochs
-        total_epochs = cfg.training.epochs
+
+    # Choose scheduler mode
+    scheduler_mode = getattr(cfg.training, "scheduler", None)
+    if scheduler_mode is None:
+        scheduler_mode = "sgdr" if getattr(cfg.training, "sgdr", False) else "cosine"
+
+    def _noop_sched(optimizer):
+        class _NoOp:
+            def step(self): pass
+            def state_dict(self): return {}
+            def load_state_dict(self, _): pass
+            def get_last_lr(self): return [optimizer.param_groups[0]["lr"]]
+        return _NoOp()
+
+    if scheduler_mode == "none":
+        print("using constant LR (no scheduler)")
+        sched = _noop_sched(opt)
+    elif scheduler_mode == 'cosine_warmup':
+        print("using warmup + cosine (LambdaLR)")
+        warm = int(getattr(cfg.training, "warmup_epochs", 2))
+        total = int(cfg.training.epochs)
+        eta_min = float(cfg.training.min_lr)
+        base_lr = float(cfg.training.lr)
 
         def lr_lambda(epoch):
-            if epoch < warm_epochs:
-                return (epoch + 1) / warm_epochs            # linear warm-up 0→1
-            # cosine part: epoch ∈ [warm, total)
-            cosine_e = epoch - warm_epochs
-            cosine_T = total_epochs - warm_epochs
-            return 0.5 * (1 + np.cos(np.pi * cosine_e / cosine_T))
+            # epoch is 0-based
+            e = epoch + 1
+            if warm > 0 and e <= warm:
+                return max(1e-6, e / warm)  # linear warmup 0→1 (clamped >0 for safety)
+            # cosine from warm+1 → total
+            # scale from base_lr to eta_min
+            t = max(1, total - max(warm, 0))
+            k = e - max(warm, 0)
+            cos = 0.5 * (1.0 + np.cos(np.pi * min(k, t) / t))
+            # return factor relative to base_lr so Optimizer LR = base_lr * factor
+            return (eta_min / base_lr) + (1.0 - (eta_min / base_lr)) * cos
+
         sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
-    else:
+    elif scheduler_mode == 'sgdr':
+        print("using cosine annealing with warm restarts (SGDR)")
+        num_cycles = max(1, int(getattr(cfg.training, "num_lr_cycles", 3)))
+        T_0 = max(1, cfg.training.epochs // num_cycles)
+        T_mult = int(getattr(cfg.training, "T_mult", 2))
+        sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            opt, T_0=T_0, T_mult=T_mult, eta_min=cfg.training.min_lr
+        )
+    elif scheduler_mode == 'cosine_annealing':
         print("using cosineannealinglr")
-        T_max = cfg.training.epochs // cfg.training.num_lr_cycles
+        cycles = max(1, int(getattr(cfg.training, "num_lr_cycles", 1)))
+        T_max = max(1, cfg.training.epochs // cycles)
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(
             opt, T_max, eta_min=cfg.training.min_lr
         )
+    else:
+        raise ValueError(f"Unknown training.scheduler='{scheduler_mode}'")
     best_loss = float("inf")
 
 
