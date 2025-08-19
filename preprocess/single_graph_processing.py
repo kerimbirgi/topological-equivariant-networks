@@ -504,32 +504,35 @@ def create_graphs_from_dataset(
     lig_files = [f for f in os.listdir(lig_dir) if f.endswith(".pt")]
     pro_files = [f for f in os.listdir(pro_dir) if f.endswith(".pt")]
 
-    # Basic length check
-    if len(lig_files) != len(pro_files):
-        raise RuntimeError(
-            f"Mismatch between ligand/protein file counts: ligand={len(lig_files)} vs protein={len(pro_files)}"
-        )
-
-    # Stronger: ID set equality check
+    # Extract IDs from file names
     lig_ids = {os.path.splitext(f)[0] for f in lig_files}
     pro_ids = {os.path.splitext(f)[0] for f in pro_files}
-    if lig_ids != pro_ids:
-        only_lig = sorted(lig_ids - pro_ids)
-        only_pro = sorted(pro_ids - lig_ids)
-        msg = ["Ligand/Protein ID sets differ even though counts match."]
-        if only_lig:
-            msg.append(f"Only in ligand (showing up to 20): {only_lig[:20]}")
-        if only_pro:
-            msg.append(f"Only in protein (showing up to 20): {only_pro[:20]}")
-        raise RuntimeError(" \n".join(msg))
+    
+    # Find intersection - only process files that exist in both directories
+    common_ids = lig_ids & pro_ids
+    
+    # Log file count information
+    logger.info(f"Found {len(lig_files)} ligand files, {len(pro_files)} protein files")
+    logger.info(f"Common IDs (files in both directories): {len(common_ids)}")
+    
+    if len(common_ids) == 0:
+        raise RuntimeError("No common files found between ligand and protein directories")
+    
+    # Log missing files for information (but don't fail)
+    only_lig = sorted(lig_ids - pro_ids)
+    only_pro = sorted(pro_ids - lig_ids)
+    if only_lig:
+        logger.warning(f"Ligand files without matching protein files: {len(only_lig)} (showing first 10: {only_lig[:10]})")
+    if only_pro:
+        logger.warning(f"Protein files without matching ligand files: {len(only_pro)} (showing first 10: {only_pro[:10]})")
 
     # Print graph creation config for info
     logger.info(f"Cross connect: {connect_cross}, r_cut: {r_cut}")
     
     tasks = []
-    #pair_ids = sorted(lig_ids.intersection(pro_ids))
-    pair_ids = lig_ids & pro_ids
-    ids = sorted(pair_ids & df_ids)
+    # Use only files that exist in both directories and are also in the dataframe
+    ids = sorted(common_ids & df_ids)
+    logger.info(f"IDs to process (in both directories AND dataframe): {len(ids)}")
     for tid in tqdm(ids, total=len(ids), desc="Build merge tasks", file=sys.stdout):
         lig_pt = os.path.join(lig_dir, f"{tid}.pt")
         pro_pt = os.path.join(pro_dir, f"{tid}.pt")
