@@ -1,6 +1,6 @@
-#PBS -l select=1:ncpus=8:mem=40gb
+#PBS -l select=1:ncpus=8:mem=80gb
 #PBS -l walltime=24:0:0
-#PBS -N create_rcut5
+#PBS -N rcut6
 
 cd $PBS_O_WORKDIR
 eval "$(~/miniforge3/bin/conda shell.bash hook)"
