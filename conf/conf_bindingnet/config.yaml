@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - dataset: subset_20p_no_supercell_no_connect_cross_self
-  - experiment: 128_dims
+  - dataset: full_no_supercell_no_crossconnect
+  - experiment: standard
 
 dataset:
   # these values can be overwritten by the experiments

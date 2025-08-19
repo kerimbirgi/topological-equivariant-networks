@@ -26,7 +26,7 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     model.eval()
     preds_cpu: list[torch.Tensor] = []
     targets_cpu: list[torch.Tensor] = []
-    with torch.inference_mode():
+    with torch.no_grad():
         for batch in test_dataloader:
             batch = batch.to(device)
             pred = model(batch)

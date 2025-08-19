@@ -580,7 +580,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--index", 
         type=str, 
-        default="/rds/general/user/kgb24/ephemeral/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
+        default="/rds/general/user/kgb24/ephemeral/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets.csv"
     )
     parser.add_argument(
         "--num_workers", 
@@ -607,7 +607,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--out_root", 
         type=str,
-        default="/rds/general/user/kgb24/home/topological-equivariant-networks/data/bindingnetcc/subset_20p_base_graphs/preprocessed"
+        default="/rds/general/user/kgb24/home/topological-equivariant-networks/data/bindingnetcc/base_graphs/preprocessed"
     )
     parser.add_argument(
         "--connect_cross",

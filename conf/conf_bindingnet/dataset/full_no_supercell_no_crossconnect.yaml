@@ -1,0 +1,10 @@
+index: "/rds/general/user/kgb24/ephemeral/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets.csv"
+splits_dir: "/rds/general/user/kgb24/ephemeral/BindingNetv2/processed/splits/full"
+use_postprocessed: false
+supercell: false
+connectivity: "self"  # Choice in [self, all_to_all]
+# BindingNet stuff
+connect_cross: false
+r_cut: 0
+merge_graphs: true
+force_reload: true
