@@ -272,9 +272,11 @@ def merge_ligand_and_protein(
     assert ligand.x is not None and ligand.pos is not None and ligand.edge_index is not None and ligand.edge_attr is not None
     assert protein.x is not None and protein.pos is not None and protein.edge_index is not None and protein.edge_attr is not None
 
-    num_lig = ligand.x.size(0)
-    num_pro = protein.x.size(0)
+    # number of ligand and protein atoms
+    num_lig = ligand.x.size(0) 
+    num_pro = protein.x.size(0) 
 
+    # concatenate ligand and protein node features and positions
     x   = torch.cat([ligand.x, protein.x], dim=0)          # (N, F)
     pos = torch.cat([ligand.pos, protein.pos], dim=0)      # (N, 3)
 
@@ -284,10 +286,11 @@ def merge_ligand_and_protein(
     origin_flag = torch.cat([lig_flag, pro_flag], dim=0)   # (N, 1)
     x = torch.cat([x, origin_flag], dim=1)                 # (N, F+1)
 
+    # For tracking the origin of each node, get used as custom attribute in the Data object
     origin_nodes = torch.cat([
         torch.zeros(num_lig, dtype=torch.long),            # ligand nodes
         torch.ones (num_pro, dtype=torch.long)             # protein nodes
-    ], dim=0)                                              # (N,)
+    ], dim=0)                                              # (N,) 
 
     # ------------------------------------------------------------------ #
     # 2. edges  (shift indices of protein by +num_lig)
@@ -297,26 +300,25 @@ def merge_ligand_and_protein(
     edge_index_pro = protein.edge_index + prot_shift       # shifted
 
     # Add edge type features (one-hot encoding)
-    # Dynamic encoding based on connect_cross flag:
-    # connect_cross=False: [intra_ligand, intra_protein]
-    # connect_cross=True:  [intra_ligand, intra_protein, inter_molecular]
+    # no connect_cross: [intra_ligand, intra_protein]
+    # connect_cross:  [intra_ligand, intra_protein, inter_molecular]
     num_lig_edges = ligand.edge_attr.size(0)
     num_pro_edges = protein.edge_attr.size(0)
     
     if connect_cross:
-        # 3-way encoding: [intra_ligand, intra_protein, inter_molecular]
-        lig_type = torch.tensor([[1, 0, 0]], dtype=torch.float).repeat(num_lig_edges, 1)
-        pro_type = torch.tensor([[0, 1, 0]], dtype=torch.float).repeat(num_pro_edges, 1)
+        # [intra_ligand, intra_protein, inter_molecular]
+        lig_type = torch.tensor([[1, 0, 0]], dtype=torch.float).repeat(num_lig_edges, 1) # (num_lig_edges, 3)
+        pro_type = torch.tensor([[0, 1, 0]], dtype=torch.float).repeat(num_pro_edges, 1) # (num_pro_edges, 3)
     else:
-        # 2-way encoding: [intra_ligand, intra_protein]
-        lig_type = torch.tensor([[1, 0]], dtype=torch.float).repeat(num_lig_edges, 1)
-        pro_type = torch.tensor([[0, 1]], dtype=torch.float).repeat(num_pro_edges, 1)
+        # [intra_ligand, intra_protein]
+        lig_type = torch.tensor([[1, 0]], dtype=torch.float).repeat(num_lig_edges, 1) # (num_lig_edges, 2)
+        pro_type = torch.tensor([[0, 1]], dtype=torch.float).repeat(num_pro_edges, 1) # (num_pro_edges, 2)
     
-    # Concatenate original edge features with type features (dimensions should now be consistent)
+    # Concatenate original edge features with type features
     ligand_edge_attr_enhanced = torch.cat([ligand.edge_attr, lig_type], dim=1)
     protein_edge_attr_enhanced = torch.cat([protein.edge_attr, pro_type], dim=1)
     
-    # Debug: Check for any remaining dimension mismatches
+    # Sanity check: dimensions of edge features should be same for protein and ligand
     if ligand_edge_attr_enhanced.size(1) != protein_edge_attr_enhanced.size(1):
         raise ValueError(
             f"Edge feature dimension mismatch after fixes: "
@@ -325,22 +327,25 @@ def merge_ligand_and_protein(
             f"Original protein edge_attr: {protein.edge_attr.size(1)}"
         )
 
+    # Create merged graph edges and attributes, NOTE: Does not include cross edges yet!
     edge_index = torch.cat([edge_index_lig, edge_index_pro], dim=1)
     edge_attr  = torch.cat([ligand_edge_attr_enhanced, protein_edge_attr_enhanced], dim=0)
 
+    # Metadata for tracking the origin of each edge, not used in training/inference
     origin_edges = torch.cat([
-        torch.zeros(ligand.edge_index.size(1),  dtype=torch.long),  # ligand
-        torch.ones (protein.edge_index.size(1), dtype=torch.long)   # protein
+        torch.zeros(ligand.edge_index.size(1),  dtype=torch.long),
+        torch.ones (protein.edge_index.size(1), dtype=torch.long) 
     ], dim=0)
 
     # ------------------------------------------------------------------ #
-    # 3. optional ligand-protein cross edges (distance < r_cut)
+    # 3. (optional) ligand-protein cross edges (distance < r_cut)    
     # ------------------------------------------------------------------ #
     if connect_cross:
         # all-pairs distances between ligand & protein atoms
         d = torch.cdist(pos[:num_lig], pos[num_lig:])      # (num_lig, num_pro)
-        src, dst = torch.nonzero(d < r_cut, as_tuple=True)
-        # map back to global indices
+        src, dst = torch.nonzero(d < r_cut, as_tuple=True) # Find pairs within cutoff distance
+        
+        # map back to global indices, shift protein indices by num_lig
         src_idx = src
         dst_idx = dst + prot_shift
 
@@ -360,6 +365,15 @@ def merge_ligand_and_protein(
         # (This only happens when connect_cross=True, so we always use 3-way encoding here)
         cross_type = torch.tensor([[0, 0, 1]], dtype=torch.float).repeat(cross_attr_base.size(0), 1)
         cross_attr = torch.cat([cross_attr_base, cross_type], dim=1)
+
+        # Sanity check: dimensions of cross edge features should be same for protein and ligand
+        if cross_attr.size(1) != edge_attr.size(1):
+            raise ValueError(
+                f"Cross edge feature dimension mismatch: "
+                f"cross_attr={cross_attr.size(1)} vs existing edge_attr={edge_attr.size(1)}. "
+                f"original_edge_feat_dim={original_edge_feat_dim}, "
+                f"connect_cross={connect_cross}"
+            )
 
         edge_index = torch.cat([edge_index, cross_edge_index, rev_edge_index], dim=1)
         edge_attr  = torch.cat([edge_attr,  cross_attr,     cross_attr],     dim=0)
@@ -415,12 +429,12 @@ def build_and_save_pair(task):
 def merge_from_precomputed(task):
     """Merge precomputed ligand and protein .pt graphs and save merged .pt
 
-    task = (tuple_id, ligand_pt_path, protein_pt_path, merged_out_path, connect_cross, r_cut)
+    task = (tuple_id, ligand_pt_path, protein_pt_path, merged_out_path, connect_cross, r_cut, force_reload)
     """
-    tuple_id, lig_pt, pro_pt, out_path, connect_cross, r_cut = task
+    tuple_id, lig_pt, pro_pt, out_path, connect_cross, r_cut, force_reload = task
     try:
         # Skip if target exists and loads
-        if os.path.exists(out_path):
+        if os.path.exists(out_path) and not force_reload:
             try:
                 g = torch.load(out_path, map_location="cpu", weights_only=False)
                 if getattr(g, "pos", None) is not None and getattr(g, "edge_index", None) is not None:
@@ -465,6 +479,7 @@ def create_graphs_from_dataset(
                 merged_data_path_root: str,
                 connect_cross: bool,
                 r_cut: float,
+                force_reload: bool = False,
                 num_workers: int = 1,
                 chunksize: int = 8,
                 max_tasks_per_child: int = 10,
@@ -519,7 +534,7 @@ def create_graphs_from_dataset(
         lig_pt = os.path.join(lig_dir, f"{tid}.pt")
         pro_pt = os.path.join(pro_dir, f"{tid}.pt")
         out_pt = os.path.join(merged_data_path_root, f"{tid}.pt")
-        tasks.append((tid, lig_pt, pro_pt, out_pt, connect_cross, r_cut))
+        tasks.append((tid, lig_pt, pro_pt, out_pt, connect_cross, r_cut, force_reload))
 
     ok = skipped = failed = 0
 

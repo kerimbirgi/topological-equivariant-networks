@@ -48,6 +48,7 @@ class BindingNetCC(InMemoryDataset):
         self.connect_cross = connect_cross
         self.r_cut = r_cut if connect_cross else 0.0
         self.supercell = supercell
+        self.force_reload = force_reload
         self.dim = len(lifters) - 1
 
         # Update dimension and lifters if supercell
@@ -79,6 +80,7 @@ class BindingNetCC(InMemoryDataset):
         logger.info(f"Index file: {self.index}")
         logger.info(f"Merge graphs enabled: {self.merge_graphs}")
         logger.info(f"Connect cross: {self.connect_cross}, R_cut: {self.r_cut}")
+        logger.info(f"Force reload: {self.force_reload}")
         
         df = pd.read_csv(self.index)
         logger.info(f"Loaded index with {len(df)} entries")
@@ -113,7 +115,8 @@ class BindingNetCC(InMemoryDataset):
                 self.preprocessed_graphs_path, 
                 merged_data_path_root,
                 self.connect_cross,
-                self.r_cut
+                self.r_cut,
+                force_reload=self.force_reload
             ) # creates graphs and stores them in merged_data_path_root
 
         for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing BindingNetCC"):
