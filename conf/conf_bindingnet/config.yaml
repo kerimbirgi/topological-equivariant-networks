@@ -45,7 +45,7 @@ model:
   visible_dims: null
 
 training:
-  epochs: 200
+  epochs: 150
   batch_size: 32
   weight_decay: 1e-16
   scheduler_mode: "cosine_annealing"
