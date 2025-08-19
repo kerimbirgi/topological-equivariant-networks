@@ -7,6 +7,7 @@ def atom_lift(graph: Data) -> set[Cell]:
     cells = set()
     X = graph.x
     for i in range(X.size(0)):
+        # Map to ensure all features are floats
         cells.add((frozenset([i]), tuple(map(float, X[i].tolist()))))
     return cells
 

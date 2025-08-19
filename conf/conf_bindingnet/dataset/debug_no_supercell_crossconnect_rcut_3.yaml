@@ -4,6 +4,9 @@ use_postprocessed: false
 supercell: false
 connectivity: "self"  # Choice in [self, all_to_all]
 # BindingNet stuff
+lifters:
+  - "atom:0"
+  - "bond_cross:1"  # Use cross-connection aware bond lifter
 connect_cross: true
 r_cut: 3
 merge_graphs: false
