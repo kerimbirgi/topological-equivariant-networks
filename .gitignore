@@ -183,5 +183,3 @@ checkpoints/
 # ignore test data
 test_data/
 
-# cluster stuff
-cluster_scripts/
