@@ -353,11 +353,12 @@ def merge_ligand_and_protein(
 
         # Cross-edge features: distance + edge type
         dist = d[src, dst][:, None]            # (E_cross,1)
-        # Pad distance to match original edge feature dimensions (without edge type)
+        # Pad to match molecular bond feature order: bond_type(7) + conj(1) + ring(1) + distance(1)
+        # Use -1 as sentinel value to clearly distinguish cross-connections from molecular bonds
         original_edge_feat_dim = ligand.edge_attr.size(1)
         cross_attr_base = torch.cat([
-            dist,
-            torch.zeros(dist.size(0), original_edge_feat_dim - 1)
+            torch.full((dist.size(0), original_edge_feat_dim - 1), -1.0),  # -1 sentinel for non-bond features
+            dist                                                           # Distance at the end, like molecular bonds
         ], dim=1)
         
         # Add edge type for cross edges: [0, 0, 1] = inter_molecular
