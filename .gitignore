@@ -182,4 +182,4 @@ checkpoints/
 
 # ignore test data
 test_data/
-
+cluster_outputs
