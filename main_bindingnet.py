@@ -89,7 +89,7 @@ def main(cfg: DictConfig):
         supercell=cfg.dataset.supercell,
         connect_cross=cfg.dataset.connect_cross,
         r_cut=cfg.dataset.r_cut,
-        force_reload=cfg.force_reload if 'force_reload' in cfg else False,
+        force_reload=cfg.dataset.force_reload if 'force_reload' in cfg else False,
     )
 
     # ==== Get model =====
@@ -305,7 +305,7 @@ def main(cfg: DictConfig):
 
         sched.step()
         model.eval()
-        with torch.inference_mode():
+        with torch.no_grad():
             for _, batch in enumerate(valid_dataloader):
                 batch = batch.to(device)
                 pred = model(batch)

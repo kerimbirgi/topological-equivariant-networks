@@ -1,4 +1,4 @@
-#PBS -l select=1:ncpus=8:mem=40gb
+#PBS -l select=1:ncpus=8:mem=128gb
 #PBS -l walltime=24:0:0
 #PBS -N rcut4
 
