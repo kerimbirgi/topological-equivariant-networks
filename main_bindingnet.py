@@ -21,6 +21,9 @@ os.environ["WANDB__SERVICE_WAIT"] = "600"
 
 logger = logging.getLogger(__name__)
 
+def current_lr(opt):
+    return opt.param_groups[0]["lr"]
+
 def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     # ==== Evaluation ====
     model.eval()
@@ -53,8 +56,8 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     mae = torch.nn.functional.l1_loss(denorm_preds, targets, reduction='mean')
     mse = torch.nn.functional.mse_loss(denorm_preds, targets, reduction='mean')
     rmse = torch.sqrt(mse)
-    predictions_range = f"[{torch.max(denorm_preds)}, {torch.min(denorm_preds)}]"
-    targets_range = f"[{torch.max(targets)}, {torch.min(targets)}]"
+    predictions_range = f"[{torch.min(denorm_preds)}, {torch.max(denorm_preds)}]"
+    targets_range = f"[{torch.min(targets)}, {torch.max(targets)}]"
     with open(os.path.join(cfg.results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_evaluation.txt'), 'w') as f:
         f.write(f"Test MAE: {mae.item()}\n")
         f.write(f"Test MSE: {mse.item()}\n")
@@ -80,6 +83,7 @@ def main(cfg: DictConfig):
     logger.info(f"Using device: {device}")
 
     # ==== Get dataset and loader ======
+    logger.info("Loading dataset...")
     dataset = BindingNetCC(
         index=cfg.dataset.index,
         root=f"data/bindingnetcc/{cfg.dataset_name}",
@@ -91,59 +95,68 @@ def main(cfg: DictConfig):
         r_cut=cfg.dataset.r_cut,
         force_reload=cfg.dataset.force_reload if 'force_reload' in cfg else False,
     )
+    logger.info("Dataset loaded!")
 
     # ==== Get model =====
+    logger.info("Loading Model...")
     model = utils.get_model(cfg, dataset)
     model = model.to(device)
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Number of parameters: {num_params:}")
-    logger.info(model)
+    #logger.info(model)
+    logger.info("Model loaded!")
 
-    # Get train/test splits using the original egnn splits for reference
-    if cfg.dataset.use_postprocessed:
-        train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_sel_postprocessed.npy'))
-        valid_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_sel_postprocessed.npy'))
-        test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_sel_postprocessed.npy'))
-    else:
+
+    # Get train/test splits
+    indices_files = os.listdir(cfg.dataset.splits_dir)
+    cleanup = (
+        'train_etnn_filtered.npy' not in indices_files or 
+        'val_etnn_filtered.npy' not in indices_files or 
+        'test_etnn_filtered.npy' not in indices_files
+    )
+
+    if cleanup or cfg.dataset.filter_indices:
         train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_indices.npy'))
-        valid_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_indices.npy'))
+        val_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_indices.npy'))
         test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_indices.npy'))
-
-    if cfg.dataset.cleanup_postprocess:
         # Clean up dataset to only include valid tuples
-        df = pd.read_csv(dataset.index)
+        df = pd.read_csv(cfg.dataset.index)
         kept_mask = []
-        for _, row in df.iterrows():
+        for _, row in tqdm(df.iterrows(), total=len(df), desc="Filtering indices"):
             tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
             merged_data_path = os.path.join(dataset.root, 'preprocessed/merged', f'{tuple_id}.pt')
             kept_mask.append(os.path.exists(merged_data_path))
         kept_mask = np.array(kept_mask, dtype=bool)
 
         # Map original to compacted indices
+        print("Remapping indices...")
         compacted = np.cumsum(kept_mask) - 1  # valid where kept_mask is True
         def remap(orig_idx: np.ndarray) -> np.ndarray:
             idx = np.asarray(orig_idx, dtype=np.int64).reshape(-1)
             valid = kept_mask[idx]
             return compacted[idx[valid]].astype(np.int64)
         train_sel = remap(train_indices)
-        valid_sel = remap(valid_indices)
+        valid_sel = remap(val_indices)
         test_sel  = remap(test_indices)
+        print("Remapping done!")
 
-        np.save(os.path.join(cfg.dataset.splits_dir, 'train_sel_postprocessed.npy'), train_sel)
-        np.save(os.path.join(cfg.dataset.splits_dir, 'val_sel_postprocessed.npy'), valid_sel)
-        np.save(os.path.join(cfg.dataset.splits_dir, 'test_sel_postprocessed.npy'), test_sel)
+        np.save(os.path.join(cfg.dataset.splits_dir, 'train_etnn_filtered.npy'), train_sel)
+        np.save(os.path.join(cfg.dataset.splits_dir, 'val_etnn_filtered.npy'), valid_sel)
+        np.save(os.path.join(cfg.dataset.splits_dir, 'test_etnn_filtered.npy'), test_sel)
         print("saved new indices to:")
         print(cfg.dataset.splits_dir)
+        train_indices = train_sel
+        val_indices = valid_sel
+        test_indices = test_sel
     else:
-        # keep things as they are since cleanup already done or not necessary
-        train_sel = train_indices
-        valid_sel = valid_indices
-        test_sel = test_indices
+        train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_etnn_filtered.npy'))
+        val_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_etnn_filtered.npy'))
+        test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_etnn_filtered.npy'))
 
-    train_subset = dataset.index_select(train_sel)
-    valid_subset = dataset.index_select(valid_sel)
-    test_subset = dataset.index_select(test_sel)
+    train_subset = dataset.index_select(train_indices)
+    valid_subset = dataset.index_select(val_indices)
+    test_subset = dataset.index_select(test_indices)
 
     print(f"Length of train dataset: {len(train_subset)}")
     print(f"Length of validation dataset: {len(valid_subset)}")
@@ -170,14 +183,18 @@ def main(cfg: DictConfig):
     mean, mad = mean.to(device), mad.to(device)
 
     # ==== Get optimization objects =====
-    crit = torch.nn.L1Loss(reduction="mean")
+    if cfg.training.crit == 'L1Loss':
+        crit = torch.nn.L1Loss(reduction="mean")
+    else:
+        crit = torch.nn.MSELoss()
     opt_kwargs = dict(lr=cfg.training.lr, weight_decay=cfg.training.weight_decay)
     opt = torch.optim.Adam(model.parameters(), **opt_kwargs)
 
     # Choose scheduler mode
-    scheduler_mode = getattr(cfg.training, "scheduler", None)
-    if scheduler_mode is None:
-        scheduler_mode = "sgdr" if getattr(cfg.training, "sgdr", False) else "cosine"
+    try:
+        scheduler_mode = cfg.training.scheduler_mode
+    except Exception as e:
+        raise ValueError("Invalid scheduler mode")
 
     def _noop_sched(optimizer):
         class _NoOp:
@@ -225,6 +242,12 @@ def main(cfg: DictConfig):
         T_max = max(1, cfg.training.epochs // cycles)
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(
             opt, T_max, eta_min=cfg.training.min_lr
+        )
+    elif scheduler_mode == 'ReduceLROnPlateau':
+            sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            opt,
+            factor=0.5,
+            patience=3,     
         )
     else:
         raise ValueError(f"Unknown training.scheduler='{scheduler_mode}'")
@@ -278,7 +301,7 @@ def main(cfg: DictConfig):
     num_epochs=cfg.training.epochs
     epoch_iter = tqdm(range(start_epoch, cfg.training.epochs), desc="Epochs", position=0)
     for epoch in epoch_iter:
-        epoch_start_time, epoch_mae_train, epoch_loss_train, epoch_mae_val = time.time(), 0, 0, 0
+        epoch_start_time, epoch_mae_train, epoch_mse_train, epoch_loss_train, epoch_mae_val, epoch_mse_val = time.time(), 0, 0, 0, 0, 0
 
         model.train()
         batch_iter = tqdm(train_dataloader, desc=f"Train {epoch+1}/{num_epochs}", position=1, leave=False)
@@ -288,7 +311,10 @@ def main(cfg: DictConfig):
 
             pred = model(batch)
             loss = crit(pred, (batch.y - mean) / mad)
-            mae = crit(pred * mad + mean, batch.y)
+            #mae = crit(pred * mad + mean, batch.y)
+            denorm_pred = pred * mad + mean
+            mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
+            mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
             loss.backward()
 
             if cfg.training.clip_gradients:
@@ -300,10 +326,12 @@ def main(cfg: DictConfig):
 
             epoch_loss_train += loss.item()
             epoch_mae_train += mae.item()
-            batch_iter.set_postfix(loss=float(loss.item()), lr=sched.get_last_lr()[0])  
+            epoch_mse_train += mse.item()
+
+
+            batch_iter.set_postfix(loss=float(loss.item()), lr=current_lr(opt))  
         
 
-        sched.step()
         model.eval()
         with torch.no_grad():
             for _, batch in enumerate(valid_dataloader):
@@ -312,13 +340,22 @@ def main(cfg: DictConfig):
                 
                 # Always denormalize for proper validation metrics (since we always normalize during training)
                 denorm_pred = pred * mad + mean
-
-                mae = crit(denorm_pred, batch.y)
-                epoch_mae_val += mae.item()
+                val_mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
+                val_mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
+                #mae = crit(denorm_pred, batch.y)
+                epoch_mae_val += val_mae.item()
+                epoch_mse_val += val_mse.item()
 
         epoch_mae_train /= len(train_dataloader)
-        epoch_mae_val /= len(valid_dataloader)
         epoch_loss_train /= len(train_dataloader)
+        epoch_mse_train /= len(train_dataloader)
+        epoch_mae_val /= len(valid_dataloader)
+        epoch_mse_val /= len(valid_dataloader)
+
+        if cfg.training.scheduler_mode == 'ReduceLROnPlateau':
+            sched.step(epoch_mae_val)
+        else:
+            sched.step()
 
         if epoch_mae_val < best_loss:
             best_loss = epoch_mae_val
@@ -345,9 +382,11 @@ def main(cfg: DictConfig):
             {
                 "Train Loss": epoch_loss_train,
                 "Train MAE": epoch_mae_train,
+                "Train MSE": epoch_mse_train,
                 "Validation MAE": epoch_mae_val,
+                "Validation MSE": epoch_mse_val,
                 "Epoch Duration": epoch_duration,
-                "Learning Rate": sched.get_last_lr()[0],
+                "Learning Rate": current_lr(opt),
             },
             step=epoch,
         )
