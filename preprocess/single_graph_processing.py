@@ -357,7 +357,7 @@ def merge_ligand_and_protein(
         # Use -1 as sentinel value to clearly distinguish cross-connections from molecular bonds
         original_edge_feat_dim = ligand.edge_attr.size(1)
         cross_attr_base = torch.cat([
-            torch.full((dist.size(0), original_edge_feat_dim - 1), -1.0),  # -1 sentinel for non-bond features
+            torch.zeros(dist.size(0), original_edge_feat_dim - 1),  # -1 sentinel for non-bond features
             dist                                                           # Distance at the end, like molecular bonds
         ], dim=1)
         
