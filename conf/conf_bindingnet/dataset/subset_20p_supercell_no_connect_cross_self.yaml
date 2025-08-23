@@ -1,0 +1,10 @@
+index: "/data2/BindingNetv2/processed/indexes/Index_BindingNetv2_pockets_subset_20p.csv"
+splits_dir: "/data2/BindingNetv2/processed/splits/subset_20p"
+supercell: true
+connectivity: "self"  # Choice in [self, all_to_all]
+# BindingNet stuff
+filter_indices: true
+connect_cross: false
+r_cut: 0
+merge_graphs: false
+force_reload: false
