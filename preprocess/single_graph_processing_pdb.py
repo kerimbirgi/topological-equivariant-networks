@@ -3,6 +3,8 @@ import torch
 from rdkit import Chem
 from torch_geometric.data import Data
 from rdkit.Chem.rdchem import BondType as BT
+from rdkit import RDLogger
+RDLogger.DisableLog('rdApp.warning')   # hide warnings, keep errors
 import argparse
 from tqdm import tqdm
 import pandas as pd
@@ -58,8 +60,6 @@ def process_ligand_sdf(sdf_path: str) -> Data:
     mol = supplier[0] # We process single molecule ligands, no disconnected ones.
     if mol is None:
         raise ValueError(f"Could not parse ligand SDF file: {sdf_path}")
-    if not mol.GetConformer().Is3D():
-        raise ValueError("Ligand is not 3D")
 
     # Node features
     
@@ -164,7 +164,8 @@ def process_ligand_sdf(sdf_path: str) -> Data:
         x=x,
         pos=pos,
         edge_index=edge_index,
-        edge_attr=edge_attr
+        edge_attr=edge_attr,
+        mol=mol
     )
 
 def process_protein_pdb_ligand_style(pdb_path: str) -> Data:
@@ -247,7 +248,13 @@ def process_protein_pdb_ligand_style(pdb_path: str) -> Data:
         logger.warning(f"Protein {pdb_path}: Position shape mismatch, expected ({x.shape[0]}, 3), got {pos.shape}")
         raise ValueError(f"Protein position shape mismatch: expected ({x.shape[0]}, 3), got {pos.shape}")
 
-    return Data(x=x, pos=pos, edge_index=edge_index, edge_attr=edge_attr)
+    return Data(
+        x=x, 
+        pos=pos,
+        edge_index=edge_index, 
+        edge_attr=edge_attr,
+        mol = mol
+    )
 
 
 def merge_ligand_and_protein(
@@ -590,6 +597,41 @@ def create_graphs_from_dataset(
     logger.info("Merged graphs creation finished.")
     
 
+def create_single_graphs(index_path, out_root):
+    os.makedirs(out_root, exist_ok=True)
+    lig_dir = os.path.join(out_root, "ligand")
+    pro_dir = os.path.join(out_root, "protein")
+    os.makedirs(lig_dir, exist_ok=True)
+    os.makedirs(pro_dir, exist_ok=True)
+
+    df = pd.read_csv(index_path)
+    tasks = []
+    for idx, row in tqdm(df.iterrows(), total=len(df), file=sys.stdout):
+        tuple_id = row['Target ChEMBLID'] + "_" + row['Molecule ChEMBLID']
+        ligand_path = row['ligand_sdf_path']
+        pocket_path = row['pocket_pdb_path']
+        tasks.append((tuple_id, ligand_path, pocket_path, out_root))
+    
+    ok = skipped = failed = 0
+    for task in tqdm(tasks, total=len(tasks), file=sys.stdout,
+                        mininterval=0.2, smoothing=0, dynamic_ncols=True,
+                        desc="Creating single graphs"):
+
+        tid, status, msg = build_and_save_pair(task)
+
+
+        if status == "ok":
+            ok += 1
+        elif status == "skip":
+            skipped += 1
+        else:
+            failed += 1
+            logger.error(f"{tid} failed: {msg}")
+        sys.stdout.flush()
+        sys.stderr.flush()
+    
+    logger.info(f"Finished. ok={ok}, skipped={skipped}, failed={failed}, total={len(tasks)}")
+    logger.info("Program finished.") 
 
 
 if __name__ == "__main__":
@@ -598,7 +640,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--index", 
         type=str, 
-        default="/data2/PDBBind/processed/indexes/Index_general.csv"
+        default="/data2/PDBBind/processed/indexes/Index_pdbbind_general.csv"
     )
     parser.add_argument(
         "--num_workers", 

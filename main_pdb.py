@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 import hydra
+from hydra.utils import get_original_cwd, to_absolute_path
 import torch
 from omegaconf import DictConfig, OmegaConf
 from torch_geometric.loader import DataLoader
@@ -25,6 +26,8 @@ def current_lr(opt):
     return opt.param_groups[0]["lr"]
 
 def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
+    os.makedirs(cfg.results_dir, exist_ok=True)
+
     # ==== Evaluation ====
     model.eval()
     preds_cpu: list[torch.Tensor] = []
@@ -58,6 +61,7 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     rmse = torch.sqrt(mse)
     predictions_range = f"[{torch.min(denorm_preds)}, {torch.max(denorm_preds)}]"
     targets_range = f"[{torch.min(targets)}, {torch.max(targets)}]"
+
     with open(os.path.join(cfg.results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_evaluation.txt'), 'w') as f:
         f.write(f"Test MAE: {mae.item()}\n")
         f.write(f"Test MSE: {mse.item()}\n")
@@ -75,8 +79,7 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
 
 @hydra.main(config_path="conf/conf_pdb", config_name="config", version_base=None)
 def main(cfg: DictConfig):
-    logger.debug("Imports successful and program started")
-    
+
     # ==== Initial setup =====
     utils.set_seed(cfg.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -84,7 +87,7 @@ def main(cfg: DictConfig):
 
     # ==== Get dataset and loader ======
     logger.info("Loading dataset...")
-    dataset = PDBBindCC(
+    train_dataset = PDBBindCC(
         index=cfg.dataset.index,
         root=f"data/pdbbind/{cfg.dataset_name}",
         lifters=list(cfg.dataset.lifters),
@@ -95,11 +98,36 @@ def main(cfg: DictConfig):
         r_cut=cfg.dataset.r_cut,
         force_reload=cfg.dataset.force_reload if 'force_reload' in cfg else False,
     )
+    # deterministic 80/20 split
+    rng = np.random.default_rng(cfg.seed)
+    all_idx = np.arange(len(train_dataset), dtype=np.int64)
+    rng.shuffle(all_idx)
+    n_val = int(0.2 * len(all_idx))
+    val_idx = all_idx[:n_val]
+    train_idx = all_idx[n_val:]
+    train_subset = train_dataset.index_select(train_idx)
+    valid_subset = train_dataset.index_select(val_idx)
+
+    # Load casf as test set
+    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "casf.yaml")
+    casf_config: DictConfig = OmegaConf.load(casf_cfg_path)
+    test_dataset = PDBBindCC(
+        index=casf_config.dataset.index,
+        root=f"data/pdbbind/{casf_config.dataset_name}",
+        lifters=list(casf_config.dataset.lifters),
+        neighbor_types=list(casf_config.dataset.neighbor_types),
+        connectivity=casf_config.dataset.connectivity,
+        supercell=casf_config.dataset.supercell,
+        connect_cross=casf_config.dataset.connect_cross,
+        r_cut=casf_config.dataset.r_cut,
+        force_reload=casf_config.dataset.force_reload if 'force_reload' in casf_config.dataset else False,
+    )
+
     logger.info("Dataset loaded!")
 
     # ==== Get model =====
     logger.info("Loading Model...")
-    model = utils.get_model(cfg, dataset)
+    model = utils.get_model(cfg, train_dataset)
     model = model.to(device)
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -107,73 +135,25 @@ def main(cfg: DictConfig):
     #logger.info(model)
     logger.info("Model loaded!")
 
-
-    # Get train/test splits
-    indices_files = os.listdir(cfg.dataset.splits_dir)
-    cleanup = (
-        'train_etnn_filtered.npy' not in indices_files or 
-        'val_etnn_filtered.npy' not in indices_files or 
-        'test_etnn_filtered.npy' not in indices_files
-    )
-
-    if cleanup or cfg.dataset.filter_indices:
-        train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_indices.npy'))
-        val_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_indices.npy'))
-        test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_indices.npy'))
-        # Clean up dataset to only include valid tuples
-        df = pd.read_csv(cfg.dataset.index)
-        kept_mask = []
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="Filtering indices"):
-            tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
-            merged_data_path = os.path.join(dataset.root, 'preprocessed/merged', f'{tuple_id}.pt')
-            kept_mask.append(os.path.exists(merged_data_path))
-        kept_mask = np.array(kept_mask, dtype=bool)
-
-        # Map original to compacted indices
-        print("Remapping indices...")
-        compacted = np.cumsum(kept_mask) - 1  # valid where kept_mask is True
-        def remap(orig_idx: np.ndarray) -> np.ndarray:
-            idx = np.asarray(orig_idx, dtype=np.int64).reshape(-1)
-            valid = kept_mask[idx]
-            return compacted[idx[valid]].astype(np.int64)
-        train_sel = remap(train_indices)
-        valid_sel = remap(val_indices)
-        test_sel  = remap(test_indices)
-        print("Remapping done!")
-
-        np.save(os.path.join(cfg.dataset.splits_dir, 'train_etnn_filtered.npy'), train_sel)
-        np.save(os.path.join(cfg.dataset.splits_dir, 'val_etnn_filtered.npy'), valid_sel)
-        np.save(os.path.join(cfg.dataset.splits_dir, 'test_etnn_filtered.npy'), test_sel)
-        print("saved new indices to:")
-        print(cfg.dataset.splits_dir)
-        train_indices = train_sel
-        val_indices = valid_sel
-        test_indices = test_sel
-    else:
-        train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_etnn_filtered.npy'))
-        val_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_etnn_filtered.npy'))
-        test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_etnn_filtered.npy'))
-
-    train_subset = dataset.index_select(train_indices)
-    valid_subset = dataset.index_select(val_indices)
-    test_subset = dataset.index_select(test_indices)
-
-    print(f"Length of train dataset: {len(train_subset)}")
-    print(f"Length of validation dataset: {len(valid_subset)}")
-    print(f"Length of test dataset: {len(test_subset)}")
-
+    # Dataloaders
     train_dataloader = DataLoader(
         train_subset,
+        num_workers=cfg.training.num_workers,
+        pin_memory=cfg.training.pin_memory,
         batch_size=cfg.training.batch_size,
         shuffle=True,
     )
     valid_dataloader = DataLoader(
         valid_subset,
+        num_workers=cfg.training.num_workers,
+        pin_memory=cfg.training.pin_memory,
         batch_size=cfg.training.batch_size,
         shuffle=False,
     )
     test_dataloader = DataLoader(
-        test_subset,
+        test_dataset,
+        num_workers=cfg.training.num_workers,
+        pin_memory=cfg.training.pin_memory,
         batch_size=cfg.training.batch_size,
         shuffle=False,
     )
@@ -288,7 +268,7 @@ def main(cfg: DictConfig):
     wandb_config["num_params"] = num_params
 
     wandb.init(
-        project="bindingnet_regression",
+        project="pdbbind_regression",
         name=f"{cfg.experiment_name}_{cfg.dataset_name}",
         entity=os.environ.get("WANDB_ENTITY"),
         config=wandb_config,
@@ -299,6 +279,7 @@ def main(cfg: DictConfig):
 
     # === Training loop ===
     num_epochs=cfg.training.epochs
+    early_stop_counter = 0
     epoch_iter = tqdm(range(start_epoch, cfg.training.epochs), desc="Epochs", position=0)
     for epoch in epoch_iter:
         epoch_start_time, epoch_mae_train, epoch_mse_train, epoch_loss_train, epoch_mae_val, epoch_mse_val = time.time(), 0, 0, 0, 0, 0
@@ -391,6 +372,16 @@ def main(cfg: DictConfig):
             step=epoch,
         )
         epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val)
+
+        if cfg.training.early_stop:
+            if epoch_mae_val > best_loss:
+                early_stop_counter +=1
+            else:
+                early_stop_counter = 0
+            
+            if early_stop_counter > cfg.training.early_stop_patience:
+                break # Finish training early if patience has been surpassed
+            
 
     # Save final checkpoint
     logger.info("Saving final checkpoint...")

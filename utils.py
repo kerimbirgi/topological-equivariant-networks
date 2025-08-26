@@ -111,6 +111,16 @@ def get_model(cfg: DictConfig, dataset: Dataset) -> nn.Module:
             cfg.dataset.connectivity,
             cfg.dataset.neighbor_types
         )
+    elif cfg.task_name == "PDBBind":
+        global_pool = True # What does this do?
+        sparse_invariant_computation = False # What does this do?
+        pos_update = False # What does this do?
+
+        adjacencies = get_adjacency_types(
+            dim,
+            cfg.dataset.connectivity,
+            cfg.dataset.neighbor_types
+        )
 
     model = ETNN(
         num_features_per_rank=num_features_per_rank,

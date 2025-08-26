@@ -4,6 +4,8 @@ defaults:
   - experiment: standard
 
 dataset:
+  index: "/data2/PDBBind/processed/indexes/Index_casf.csv"
+  single_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_simple"
   lifters:
   - "atom:0"
   - "bond:1"
@@ -17,10 +19,12 @@ dataset:
   connect_cross: false
   r_cut: 0
   force_reload: false
+  create_single_graphs: false
+
 
 
 task_name: PDBBind
-dataset_name: ${hydra:runtime.choices.dataset}
+dataset_name: casf
 experiment_name: ${hydra:runtime.choices.experiment}
 results_dir: results_pdbbind
 eval_only: false
@@ -45,16 +49,14 @@ model:
 
 training:
   epochs: 100
-  batch_size: 128
+  batch_size: 256
   weight_decay: 1e-16
   scheduler_mode: "cosine_annealing"
   min_lr: 0.0
   num_lr_cycles: 3
   clip_gradients: true
   clip_amount: 1.0
-  crit: 'L1Loss'
+  test_interval: 10
   lr: 5e-4
   save_interval: 10
   lambdalr: false
-  num_workers: 8
-  pin_memory: true

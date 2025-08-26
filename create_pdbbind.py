@@ -6,6 +6,7 @@ import hydra
 from omegaconf import DictConfig
 
 from etnn.pdbbind.pdbbind import PDBBindCC
+from preprocess.single_graph_processing_pdb import create_single_graphs
 
 @hydra.main(config_path="conf/conf_pdb", config_name="config", version_base=None)
 def main(cfg: DictConfig):
@@ -22,8 +23,12 @@ def main(cfg: DictConfig):
     
     logger.info("Starting BindingNet dataset creation")
     logger.info(f"Dataset: {cfg.dataset}")
+    logger.info(f"Create single graphs: {cfg.dataset.create_single_graphs}")
     logger.info(f"Merge graphs: {cfg.dataset.merge_graphs}")
     logger.info(f"Force reload: {cfg.dataset.force_reload}")
+
+    if 'single_graphs_path' in cfg.dataset and cfg.dataset.create_single_graphs:
+        create_single_graphs(cfg.dataset.index, cfg.dataset.single_graphs_path)
     
     dataset = PDBBindCC(
         index=cfg.dataset.index,
@@ -34,6 +39,7 @@ def main(cfg: DictConfig):
         supercell=cfg.dataset.supercell,
         connect_cross=cfg.dataset.connect_cross,
         r_cut=cfg.dataset.r_cut,
+        preprocessed_graphs_path=cfg.dataset.single_graphs_path if 'single_graphs_path' in cfg.dataset else '/data2/PDBBind/processed/etnn/base_graphs_simple',
         force_reload=cfg.dataset.force_reload if 'force_reload' in cfg.dataset else False,
         merge_graphs=cfg.dataset.merge_graphs if 'merge_graphs' in cfg.dataset else False
     )
