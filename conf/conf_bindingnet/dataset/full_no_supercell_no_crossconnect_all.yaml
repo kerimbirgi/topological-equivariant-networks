@@ -2,7 +2,7 @@ index: "/data2/BindingNetv2/processed/indexes/Index_bindingnetv2_pockets.csv"
 splits_dir: "/data2/BindingNetv2/processed/splits/standard"
 use_postprocessed: false
 supercell: false
-connectivity: "self"  # Choice in [self, all_to_all]
+connectivity: "all_to_all"  # Choice in [self, all_to_all]
 # BindingNet stuff
 connect_cross: false
 r_cut: 0

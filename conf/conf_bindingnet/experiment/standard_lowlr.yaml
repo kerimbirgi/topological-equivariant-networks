@@ -5,7 +5,7 @@ model:
 training:
   batch_size: 64
   weight_decay: 1e-16
-  scheduler: 'cosine_annealing'
+  scheduler_mode: 'cosine_annealing'
   min_lr: 0.0
   num_lr_cycles: 3
   clip_gradients: true

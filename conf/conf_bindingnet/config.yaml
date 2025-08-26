@@ -12,8 +12,7 @@ dataset:
   neighbor_types: ["max"]  # Subset of ["+1", "-1", "min", "max"]
   connectivity: "self"  # Choice in [self, all_to_all]
   # BindingNet stuff
-  cleanup_postprocess: false
-  use_postprocessed: true
+  filter_indices: false
   merge_graphs: false
   connect_cross: false
   r_cut: 0
@@ -48,12 +47,11 @@ training:
   epochs: 150
   batch_size: 32
   weight_decay: 1e-16
-  scheduler_mode: "cosine_annealing"
+  scheduler_mode: "ReduceLROnPlateau"
   min_lr: 0.0
   num_lr_cycles: 3
   clip_gradients: true
   clip_amount: 1.0
-  test_interval: 10
   lr: 5e-4
-  save_interval: 10
-  lambdalr: false
+  save_interval: 1
+  crit: 'L1Loss'

@@ -1,0 +1,10 @@
+index: "/data2/BindingNetv2/processed/indexes/Index_pretrain_soft_overlap_tanimoto_proteins.csv"
+splits_dir: "/data2/BindingNetv2/processed/splits/pretrain"
+preprocessed_graphs: "data/bindingnetcc/full_no_supercell_no_crossconnect/preprocessed"
+supercell: false
+connectivity: "self"  # Choice in [self, all_to_all]
+# BindingNet stuff
+connect_cross: false
+r_cut: 0
+merge_graphs: false
+force_reload: false

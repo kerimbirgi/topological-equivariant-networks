@@ -3,13 +3,12 @@ model:
   num_hidden: 128
 
 training:
-  batch_size: 64
+  batch_size: 256
   weight_decay: 1e-16
-  scheduler_mode: 'cosine_annealing'
+  scheduler_mode: "cosine_annealing"
   min_lr: 0.0
   num_lr_cycles: 3
   clip_gradients: true
   clip_amount: 1.0
-  test_interval: 10
-  lr: 5e-4
+  lr: 1e-3
   crit: 'L1Loss'

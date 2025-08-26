@@ -1,0 +1,17 @@
+# @package _global_
+model:
+  num_hidden: 256
+
+training:
+  batch_size: 128
+  weight_decay: 1e-4
+  scheduler_mode: 'cosine_annealing'
+  optimizer: 'AdamW'
+  min_lr: 1e-6
+  num_lr_cycles: 1
+  clip_gradients: true
+  clip_amount: 1.0
+  lr: 2e-4
+  crit: 'L1Loss'
+  continue_from_weights: true
+  start_checkpoint: '256_start_weights'
