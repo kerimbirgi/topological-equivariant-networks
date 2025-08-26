@@ -24,6 +24,83 @@ logger = logging.getLogger(__name__)
 def current_lr(opt):
     return opt.param_groups[0]["lr"]
 
+def setup_adamw(cfg, model):
+    decay, no_decay = [], []
+    for n,p in model.named_parameters():
+        if not p.requires_grad: 
+            continue
+        if any(k in n.lower() for k in ["bias","norm","layernorm","batchnorm","bn"]):
+            no_decay.append(p)
+        else:
+            decay.append(p)
+
+    wd = float(cfg.training.weight_decay)
+    opt = torch.optim.AdamW(
+        [{"params": decay, "weight_decay": wd},
+        {"params": no_decay, "weight_decay": 0.0}],
+        lr=cfg.training.lr, betas=(0.9, 0.98)
+    )
+    return opt
+
+def build_scheduler(cfg, scheduler_mode, opt):
+    def _noop_sched(optimizer):
+        class _NoOp:
+            def step(self): pass
+            def state_dict(self): return {}
+            def load_state_dict(self, _): pass
+            def get_last_lr(self): return [optimizer.param_groups[0]["lr"]]
+        return _NoOp()
+
+    if scheduler_mode == "none":
+        print("using constant LR (no scheduler)")
+        sched = _noop_sched(opt)
+    elif scheduler_mode == 'cosine_warmup':
+        print("using warmup + cosine (LambdaLR)")
+        warm = int(getattr(cfg.training, "warmup_epochs", 2))
+        total = int(cfg.training.epochs)
+        eta_min = float(cfg.training.min_lr)
+        base_lr = float(cfg.training.lr)
+
+        def lr_lambda(epoch):
+            # epoch is 0-based
+            e = epoch + 1
+            if warm > 0 and e <= warm:
+                return max(1e-6, e / warm)  # linear warmup 0→1 (clamped >0 for safety)
+            # cosine from warm+1 → total
+            # scale from base_lr to eta_min
+            t = max(1, total - max(warm, 0))
+            k = e - max(warm, 0)
+            cos = 0.5 * (1.0 + np.cos(np.pi * min(k, t) / t))
+            # return factor relative to base_lr so Optimizer LR = base_lr * factor
+            return (eta_min / base_lr) + (1.0 - (eta_min / base_lr)) * cos
+
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
+    elif scheduler_mode == 'sgdr':
+        print("using cosine annealing with warm restarts (SGDR)")
+        num_cycles = max(1, int(getattr(cfg.training, "num_lr_cycles", 3)))
+        T_0 = max(1, cfg.training.epochs // num_cycles)
+        T_mult = int(getattr(cfg.training, "T_mult", 2))
+        sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            opt, T_0=T_0, T_mult=T_mult, eta_min=cfg.training.min_lr
+        )
+    elif scheduler_mode == 'cosine_annealing':
+        print("using cosineannealinglr")
+        cycles = max(1, int(getattr(cfg.training, "num_lr_cycles", 1)))
+        T_max = max(1, cfg.training.epochs // cycles)
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max, eta_min=cfg.training.min_lr
+        )
+    elif scheduler_mode == 'ReduceLROnPlateau':
+            sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            opt,
+            factor=0.5,
+            patience=5,     
+        )
+    else:
+        raise ValueError(f"Unknown training.scheduler='{scheduler_mode}'")
+
+    return sched
+
 def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     # ==== Evaluation ====
     model.eval()
@@ -188,7 +265,13 @@ def main(cfg: DictConfig):
     else:
         crit = torch.nn.MSELoss()
     opt_kwargs = dict(lr=cfg.training.lr, weight_decay=cfg.training.weight_decay)
-    opt = torch.optim.Adam(model.parameters(), **opt_kwargs)
+    if cfg.training.optimizer == 'Adam':
+        opt = torch.optim.Adam(model.parameters(), **opt_kwargs)
+    elif cfg.training.optimizer == 'AdamW':
+        opt = setup_adamw(cfg, model)
+    else:
+        raise ValueError(f"Unknown optimizer: {cfg.training.optimizer}")
+
 
     # Choose scheduler mode
     try:
@@ -196,61 +279,8 @@ def main(cfg: DictConfig):
     except Exception as e:
         raise ValueError("Invalid scheduler mode")
 
-    def _noop_sched(optimizer):
-        class _NoOp:
-            def step(self): pass
-            def state_dict(self): return {}
-            def load_state_dict(self, _): pass
-            def get_last_lr(self): return [optimizer.param_groups[0]["lr"]]
-        return _NoOp()
+    sched = build_scheduler(cfg, scheduler_mode, opt)
 
-    if scheduler_mode == "none":
-        print("using constant LR (no scheduler)")
-        sched = _noop_sched(opt)
-    elif scheduler_mode == 'cosine_warmup':
-        print("using warmup + cosine (LambdaLR)")
-        warm = int(getattr(cfg.training, "warmup_epochs", 2))
-        total = int(cfg.training.epochs)
-        eta_min = float(cfg.training.min_lr)
-        base_lr = float(cfg.training.lr)
-
-        def lr_lambda(epoch):
-            # epoch is 0-based
-            e = epoch + 1
-            if warm > 0 and e <= warm:
-                return max(1e-6, e / warm)  # linear warmup 0→1 (clamped >0 for safety)
-            # cosine from warm+1 → total
-            # scale from base_lr to eta_min
-            t = max(1, total - max(warm, 0))
-            k = e - max(warm, 0)
-            cos = 0.5 * (1.0 + np.cos(np.pi * min(k, t) / t))
-            # return factor relative to base_lr so Optimizer LR = base_lr * factor
-            return (eta_min / base_lr) + (1.0 - (eta_min / base_lr)) * cos
-
-        sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
-    elif scheduler_mode == 'sgdr':
-        print("using cosine annealing with warm restarts (SGDR)")
-        num_cycles = max(1, int(getattr(cfg.training, "num_lr_cycles", 3)))
-        T_0 = max(1, cfg.training.epochs // num_cycles)
-        T_mult = int(getattr(cfg.training, "T_mult", 2))
-        sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            opt, T_0=T_0, T_mult=T_mult, eta_min=cfg.training.min_lr
-        )
-    elif scheduler_mode == 'cosine_annealing':
-        print("using cosineannealinglr")
-        cycles = max(1, int(getattr(cfg.training, "num_lr_cycles", 1)))
-        T_max = max(1, cfg.training.epochs // cycles)
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max, eta_min=cfg.training.min_lr
-        )
-    elif scheduler_mode == 'ReduceLROnPlateau':
-            sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            opt,
-            factor=0.5,
-            patience=3,     
-        )
-    else:
-        raise ValueError(f"Unknown training.scheduler='{scheduler_mode}'")
     best_loss = float("inf")
 
 
@@ -264,6 +294,20 @@ def main(cfg: DictConfig):
     start_epoch, run_id, best_model, best_loss = utils.load_checkpoint(
         checkpoint_path, model, opt, sched, cfg.force_restart
     )
+
+    if cfg.training.continue_from_weights:
+        logging.info(f"Starting with pretrained weights from {cfg.training.start_checkpoint}")
+        start_ckpt_path = f"{cfg.ckpt_dir}/{cfg.training.start_checkpoint}.pth"
+        start_checkpoint = torch.load(start_ckpt_path, weights_only=False)
+        model.load_state_dict(start_checkpoint["best_model"])
+
+        opt = setup_adamw(cfg, model)
+        sched = build_scheduler(cfg, scheduler_mode, opt)
+        start_epoch = 0
+        best_loss = float("inf")
+        best_model = copy.deepcopy(model)
+        run_id = None  # start a fresh W&B run
+
 
     # ==== If eval only, evaluate and exit ====
     if cfg.eval_only:
@@ -306,7 +350,7 @@ def main(cfg: DictConfig):
         model.train()
         batch_iter = tqdm(train_dataloader, desc=f"Train {epoch+1}/{num_epochs}", position=1, leave=False)
         for batch in batch_iter:
-            opt.zero_grad()
+            opt.zero_grad(set_to_none=True)
             batch = batch.to(device)
 
             pred = model(batch)

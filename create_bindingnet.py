@@ -24,6 +24,10 @@ def main(cfg: DictConfig):
     logger.info(f"Dataset: {cfg.dataset}")
     logger.info(f"Merge graphs: {cfg.dataset.merge_graphs}")
     logger.info(f"Force reload: {cfg.dataset.force_reload}")
+
+    preprocessed_graphs_path = getattr(cfg.dataset, "preprocessed_graphs", None)
+    if preprocessed_graphs_path is None:
+        preprocessed_graphs_path = "data/bindingnetcc/full_no_supercell_no_crossconnect/preprocessed"
     
     dataset = BindingNetCC(
         index=cfg.dataset.index,
@@ -35,7 +39,8 @@ def main(cfg: DictConfig):
         connect_cross=cfg.dataset.connect_cross,
         r_cut=cfg.dataset.r_cut,
         force_reload=cfg.dataset.force_reload if 'force_reload' in cfg.dataset else False,
-        merge_graphs=cfg.dataset.merge_graphs if 'merge_graphs' in cfg.dataset else False
+        merge_graphs=cfg.dataset.merge_graphs if 'merge_graphs' in cfg.dataset else False,
+        preprocessed_graphs_path = preprocessed_graphs_path
     )
     
     logger.info(f"Dataset created successfully! Length: {len(dataset)}")

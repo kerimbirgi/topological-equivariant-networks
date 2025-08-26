@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - dataset: full_no_supercell_no_crossconnect
-  - experiment: standard
+  - dataset: pretrain_basic
+  - experiment: standard_128
 
 dataset:
   # these values can be overwritten by the experiments
@@ -44,10 +44,10 @@ model:
   visible_dims: null
 
 training:
-  epochs: 150
+  epochs: 100
   batch_size: 32
   weight_decay: 1e-16
-  scheduler_mode: "ReduceLROnPlateau"
+  scheduler_mode: "cosine_annealing"
   min_lr: 0.0
   num_lr_cycles: 3
   clip_gradients: true

@@ -1,15 +1,15 @@
 # @package _global_
 model:
-  num_hidden: 128
+  num_hidden: 256
 
 training:
-  batch_size: 64
-  weight_decay: 1e-16
+  batch_size: 128
+  weight_decay: 1e-4
   scheduler_mode: 'cosine_annealing'
-  min_lr: 0.0
-  num_lr_cycles: 3
+  optimizer: 'AdamW'
+  min_lr: 1e-5
+  num_lr_cycles: 2
   clip_gradients: true
   clip_amount: 1.0
-  test_interval: 10
   lr: 5e-4
   crit: 'L1Loss'

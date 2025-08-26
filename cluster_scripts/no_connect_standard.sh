@@ -7,5 +7,5 @@ eval "$(~/miniforge3/bin/conda shell.bash hook)"
 
 conda activate etnn
 
-python main_bindingnet.py dataset=subset_20p_no_supercell_crossconnect_rcut_3 experiment=standard
+python main_bindingnet.py dataset=subset_20p_no_supercell_no_connect_cross_self experiment=standard
 
