@@ -12,7 +12,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-import utils
+import utils_head as utils
 import wandb
 from etnn.pdbbind.pdbbind import PDBBindCC
 
@@ -165,7 +165,7 @@ def main(cfg: DictConfig):
     # ==== Get optimization objects =====
     if cfg.training.crit == 'L1Loss':
         crit = torch.nn.L1Loss(reduction="mean")
-    elif cfg.training.crit == 'MSE':
+    else:
         crit = torch.nn.MSELoss()
     opt_kwargs = dict(lr=cfg.training.lr, weight_decay=cfg.training.weight_decay)
     opt = torch.optim.Adam(model.parameters(), **opt_kwargs)
@@ -291,11 +291,9 @@ def main(cfg: DictConfig):
             batch = batch.to(device)
 
             pred = model(batch)
-            #loss = crit(pred, (batch.y - mean) / mad)
-            loss = crit(pred, batch.y)
+            loss = crit(pred, (batch.y - mean) / mad)
             #mae = crit(pred * mad + mean, batch.y)
-            #denorm_pred = pred * mad + mean
-            denorm_pred = pred
+            denorm_pred = pred * mad + mean
             mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
             mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
             loss.backward()
@@ -314,7 +312,6 @@ def main(cfg: DictConfig):
 
             batch_iter.set_postfix(loss=float(loss.item()), lr=current_lr(opt))  
         
-
         model.eval()
         with torch.no_grad():
             for _, batch in enumerate(valid_dataloader):
@@ -322,8 +319,7 @@ def main(cfg: DictConfig):
                 pred = model(batch)
                 
                 # Always denormalize for proper validation metrics (since we always normalize during training)
-                #denorm_pred = pred * mad + mean
-                denorm_pred = pred
+                denorm_pred = pred * mad + mean
                 val_mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
                 val_mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
                 #mae = crit(denorm_pred, batch.y)

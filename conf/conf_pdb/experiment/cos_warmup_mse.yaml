@@ -10,5 +10,5 @@ training:
   clip_gradients: true
   clip_amount: 1.0
   lr: 3e-4
-  crit: 'L1Loss'
+  crit: 'MSE'
   early_stop: false

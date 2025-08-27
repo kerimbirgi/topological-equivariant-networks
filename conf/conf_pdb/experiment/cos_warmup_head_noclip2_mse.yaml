@@ -1,14 +1,14 @@
 # @package _global_
 training:
   epochs: 200
-  batch_size: 128
-  weight_decay: 1e-4
+  batch_size: 32
+  weight_decay: 1e-16
   scheduler_mode: 'cosine_warmup'
   optimizer: 'AdamW'
   min_lr: 1e-6
   num_lr_cycles: 1
-  clip_gradients: true
+  clip_gradients: false
   clip_amount: 1.0
   lr: 3e-4
-  crit: 'L1Loss'
+  crit: 'MSE'
   early_stop: false

@@ -7,7 +7,7 @@ training:
   optimizer: 'AdamW'
   min_lr: 1e-6
   num_lr_cycles: 1
-  clip_gradients: true
+  clip_gradients: false
   clip_amount: 1.0
   lr: 3e-4
   crit: 'L1Loss'
