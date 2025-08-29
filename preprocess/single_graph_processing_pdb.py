@@ -51,15 +51,45 @@ FALLBACK_BOND_TYPE = BT.UNSPECIFIED
 EXPECTED_NODE_FEATURES = 13  # 6 basic atom properties + 7 hybridization one-hot
 EXPECTED_EDGE_FEATURES = 10  # 7 bond types + is_conj + in_ring + length
 
-
-
+PREFER_MOL2 = True
 def process_ligand_sdf(sdf_path: str) -> Data:
-    supplier = Chem.SDMolSupplier(sdf_path, removeHs=False)
-    if len(supplier) > 1:
-        raise IndexError(f"Unexpexcted number of Molecules in ligand.sdf: {sdf_path}")
-    mol = supplier[0] # We process single molecule ligands, no disconnected ones.
-    if mol is None:
-        raise ValueError(f"Could not parse ligand SDF file: {sdf_path}")
+    if not os.path.exists(sdf_path):
+        print(f"Path doesnt exist {sdf_path}")
+        #exit()
+        return None
+
+    if PREFER_MOL2:
+        try:
+            mol2_path = sdf_path.replace(".sdf", ".mol2")
+            mol = Chem.MolFromMol2File(mol2_path, sanitize=True, removeHs=False)
+        except Exception as e:
+            try:
+                supplier = Chem.SDMolSupplier(sdf_path, removeHs=False)
+                if len(supplier) > 1:
+                    raise IndexError(f"Unexpexcted number of Molecules in ligand.sdf: {sdf_path}")
+                mol = supplier[0] # We process single molecule ligands, no disconnected ones.
+                if mol is None:
+                    raise ValueError(f"Could not parse ligand SDF file: {sdf_path}")
+            except Exception as e:
+                raise ValueError(f"Could not parse ligand sdf or mol2 file: {sdf_path}")
+    else:
+        try:
+            supplier = Chem.SDMolSupplier(sdf_path, removeHs=False)
+            if len(supplier) > 1:
+                raise IndexError(f"Unexpexcted number of Molecules in ligand.sdf: {sdf_path}")
+            mol = supplier[0] # We process single molecule ligands, no disconnected ones.
+            if mol is None:
+                raise ValueError(f"Could not parse ligand SDF file: {sdf_path}")
+        except Exception as e:
+            try:
+                mol2_path = sdf_path.replace(".sdf", ".mol2")
+                mol = Chem.MolFromMol2File(mol2_path, sanitize=True, removeHs=False)
+                if mol is None:
+                    raise ValueError(f"Could not parse ligand mol2 file: {sdf_path}")
+            except Exception as e:
+                raise ValueError(f"Could not parse ligand sdf or mol2 file: {sdf_path}")
+
+
 
     # Node features
     
@@ -416,8 +446,8 @@ def build_and_save_pair(task):
             lig_out = os.path.join(out_root, "ligand", f"{tuple_id}.pt")
             pro_out = os.path.join(out_root, "protein", f"{tuple_id}.pt")
 
-            if os.path.exists(lig_out) and os.path.exists(pro_out):
-                return tuple_id, "skip", ""
+            #if os.path.exists(lig_out) and os.path.exists(pro_out):
+            #    return tuple_id, "skip", ""
 
             ligand = process_ligand_sdf(ligand_path)
             protein = process_protein_pdb_ligand_style(pocket_path)
@@ -641,6 +671,7 @@ if __name__ == "__main__":
         "--index", 
         type=str, 
         default="/data2/PDBBind/processed/indexes/Index_pdbbind_general.csv"
+        #default="/data2/PDBBind/processed/indexes/Index_casf_old.csv"
     )
     parser.add_argument(
         "--num_workers", 
@@ -668,6 +699,7 @@ if __name__ == "__main__":
         "--out_root", 
         type=str,
         default="/data2/PDBBind/processed/etnn/base_graphs_simple"
+        #default="/data2/PDBBind/processed/etnn/casf_graphs_simple"
     )
     parser.add_argument(
         "--connect_cross",
