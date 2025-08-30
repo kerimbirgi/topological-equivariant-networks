@@ -672,8 +672,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--index", 
         type=str, 
-        default="/data2/PDBBind/processed/indexes/Index_pdbbind_general.csv"
-        #default="/data2/PDBBind/processed/indexes/Index_casf_old.csv"
+        #default="/data2/PDBBind/processed/indexes/Index_pdbbind_general.csv"
+        default="/data2/PDBBind/processed/indexes/Index_casf.csv"
     )
     parser.add_argument(
         "--num_workers", 
@@ -700,8 +700,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--out_root", 
         type=str,
-        default="/data2/PDBBind/processed/etnn/base_graphs_simple"
-        #default="/data2/PDBBind/processed/etnn/casf_graphs_simple"
+        #default="/data2/PDBBind/processed/etnn/base_graphs_simple"
+        default="/data2/PDBBind/processed/etnn/casf_graphs_simple"
     )
     parser.add_argument(
         "--connect_cross",

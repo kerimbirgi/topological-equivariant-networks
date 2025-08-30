@@ -159,7 +159,7 @@ def main(cfg: DictConfig):
     #    valid_subset = train_dataset.index_select(val_idx)
 
     # Load casf as test set
-    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "casf.yaml")
+    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", f"{cfg.dataset.casf_dataset}.yaml")
     casf_config: DictConfig = OmegaConf.load(casf_cfg_path)
     test_dataset = PDBBindCC(
         index=casf_config.dataset.index,

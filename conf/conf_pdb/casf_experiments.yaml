@@ -1,0 +1,62 @@
+defaults:
+  - _self_
+  - dataset: general
+  - experiment: standard
+
+dataset:
+  index: "/data2/PDBBind/processed/indexes/Index_casf.csv"
+  single_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_simple"
+  lifters:
+  - "atom:0"
+  - "bond:1"
+  supercell: false
+  neighbor_types: ["max"]  # Subset of ["+1", "-1", "min", "max"]
+  connectivity: "self"  # Choice in [self, all_to_all]
+  # BindingNet stuff
+  cleanup_postprocess: false
+  use_postprocessed: true
+  merge_graphs: false
+  connect_cross: false
+  r_cut: 0
+  force_reload: false
+  create_single_graphs: false
+
+
+
+task_name: PDBBind
+dataset_name: casf_experiments
+experiment_name: ${hydra:runtime.choices.experiment}
+results_dir: results_pdbbind
+eval_only: false
+
+compile: false
+seed: 42
+
+# checkpointing
+wandb_entity: null
+ckpt_dir: checkpoints
+ckpt_prefix: null
+force_restart: false
+
+model:
+  num_hidden: 128
+  num_layers: 7
+  normalize_invariants: true
+  batch_norm: false
+  lean: false
+  initial_features: ["hetero"]
+  visible_dims: null
+
+training:
+  epochs: 100
+  batch_size: 256
+  weight_decay: 1e-16
+  scheduler_mode: "cosine_annealing"
+  min_lr: 0.0
+  num_lr_cycles: 3
+  clip_gradients: true
+  clip_amount: 1.0
+  test_interval: 10
+  lr: 5e-4
+  save_interval: 10
+  lambdalr: false

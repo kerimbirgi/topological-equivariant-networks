@@ -203,7 +203,7 @@ def main(cfg: DictConfig):
     #    valid_subset = train_dataset.index_select(val_idx)
 
     # Load casf as test set
-    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", f"{cfg.dataset.casf_dataset}.yaml")
+    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "casf_experiments.yaml")
     casf_config: DictConfig = OmegaConf.load(casf_cfg_path)
     test_dataset = PDBBindCC(
         index=casf_config.dataset.index,
@@ -357,26 +357,6 @@ def main(cfg: DictConfig):
     if start_epoch >= cfg.training.epochs:
         logger.info("Training already completed. Exiting.")
         return
-    
-    # init wandb logger
-    if run_id is None:
-        run_id = ckpt_filename.split(".")[0] + "__" + wandb.util.generate_id()
-        if cfg.ckpt_prefix is not None:
-            run_id = "__".join([cfg.ckpt_prefix, run_id])
-
-    # create wandb config and add number of parameters
-    wandb_config = OmegaConf.to_container(cfg, resolve=True)
-    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    wandb_config["num_params"] = num_params
-
-    wandb.init(
-        project="pdbbind_casf_validation",
-        name=f"{cfg.experiment_name}_{cfg.dataset_name}",
-        entity=os.environ.get("WANDB_ENTITY"),
-        config=wandb_config,
-        id=run_id,
-        resume="allow",
-    )
 
 
     # === Training loop ===
@@ -454,38 +434,11 @@ def main(cfg: DictConfig):
             best_pcc = pcc
             best_model = copy.deepcopy(model)
 
-        # Save checkpoint
-        if epoch % cfg.training.save_interval == 0:
-            logger.info(f"Saving checkpoint at epoch {epoch + 1}")
-            save_checkpoint(
-                path=checkpoint_path,
-                model=model,
-                best_model=best_model,
-                best_pcc=best_pcc,
-                opt=opt,
-                sched=sched,
-                epoch=epoch,
-                run_id=run_id,
-            )
 
         epoch_end_time = time.time()
         epoch_duration = epoch_end_time - epoch_start_time
 
-        wandb.log(
-            {
-                "Train Loss": epoch_loss_train,
-                "Train MAE": epoch_mae_train,
-                "Train MSE": epoch_mse_train,
-                "Validation MAE": epoch_mae_val,
-                "Validation MSE": epoch_mse_val,
-                "PCC": pcc,
-                "Kendalls Tau": tau,
-                "Epoch Duration": epoch_duration,
-                "Learning Rate": current_lr(opt),
-            },
-            step=epoch,
-        )
-        epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val)
+
 
         if cfg.training.early_stop:
             if epoch_mae_val > best_pcc:
@@ -497,18 +450,7 @@ def main(cfg: DictConfig):
                 break # Finish training early if patience has been surpassed
             
 
-    # Save final checkpoint
-    logger.info("Saving final checkpoint...")
-    save_checkpoint(
-        path=checkpoint_path,
-        model=model,
-        best_model=best_model,
-        best_pcc=best_pcc,
-        opt=opt,
-        sched=sched,
-        epoch=cfg.training.epochs - 1,
-        run_id=run_id,
-    )
+
 
 
 if __name__ == "__main__":
