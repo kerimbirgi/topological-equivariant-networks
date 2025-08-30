@@ -13,7 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-import utils_head as utils
+import utils
 import wandb
 from etnn.pdbbind.pdbbind import PDBBindCC
 
@@ -24,6 +24,50 @@ SPLIT_OOD = True
 
 
 logger = logging.getLogger(__name__)
+
+def load_checkpoint(checkpoint_path, model, opt, sched, force_restart):
+    best_model = copy.deepcopy(model)
+    device = next(model.parameters()).device
+    if not force_restart and os.path.isfile(checkpoint_path):
+        print("Loading model from checkpoint!")
+        checkpoint = torch.load(checkpoint_path)
+        model.to("cpu")
+        best_model.to("cpu")
+        model.load_state_dict(checkpoint["model"])
+        best_model.load_state_dict(checkpoint["best_model"])
+        best_pcc = checkpoint["best_pcc"]
+        opt.load_state_dict(checkpoint["optimizer"])
+        sched.load_state_dict(checkpoint["scheduler"])
+        model.to(device)
+        best_model.to(device)
+        
+        # BUG FIX ATTEMPT: Ensure optimizer state is on the correct device
+        for state in opt.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
+        
+        return checkpoint["epoch"], checkpoint["run_id"], best_model, best_pcc
+    else:
+        return 0, None, best_model, 0
+
+def save_checkpoint(path, model, best_model, best_pcc, opt, sched, epoch, run_id):
+    device = next(model.parameters()).device
+    model.to("cpu")
+    best_model.to("cpu")
+    state = {
+        "epoch": epoch + 1,
+        "model": model.state_dict(),
+        "best_model": best_model.state_dict(),
+        "best_pcc": best_pcc,
+        "optimizer": opt.state_dict(),
+        "scheduler": sched.state_dict(),
+        "run_id": run_id,
+    }
+    model.to(device)
+    best_model.to(device)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(state, path)
 
 def make_protein_ood_split(dataset, val_frac=0.2, seed=42):
     N = len(dataset)
@@ -145,18 +189,18 @@ def main(cfg: DictConfig):
         force_reload=cfg.dataset.force_reload if 'force_reload' in cfg else False,
     )
     
-    if SPLIT_OOD:
-        train_subset, valid_subset = make_protein_ood_split(train_dataset)
-    else:
-        # deterministic 80/20 split
-        rng = np.random.default_rng(cfg.seed)
-        all_idx = np.arange(len(train_dataset), dtype=np.int64)
-        rng.shuffle(all_idx)
-        n_val = int(0.2 * len(all_idx))
-        val_idx = all_idx[:n_val]
-        train_idx = all_idx[n_val:]
-        train_subset = train_dataset.index_select(train_idx)
-        valid_subset = train_dataset.index_select(val_idx)
+    #if SPLIT_OOD:
+    #    train_subset, valid_subset = make_protein_ood_split(train_dataset)
+    #else:
+    #    # deterministic 80/20 split
+    #    rng = np.random.default_rng(cfg.seed)
+    #    all_idx = np.arange(len(train_dataset), dtype=np.int64)
+    #    rng.shuffle(all_idx)
+    #    n_val = int(0.2 * len(all_idx))
+    #    val_idx = all_idx[:n_val]
+    #    train_idx = all_idx[n_val:]
+    #    train_subset = train_dataset.index_select(train_idx)
+    #    valid_subset = train_dataset.index_select(val_idx)
 
     # Load casf as test set
     casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "casf.yaml")
@@ -187,20 +231,20 @@ def main(cfg: DictConfig):
 
     # Dataloaders
     train_dataloader = DataLoader(
-        train_subset,
+        train_dataset,
         num_workers=cfg.training.num_workers,
         pin_memory=cfg.training.pin_memory,
         batch_size=cfg.training.batch_size,
         shuffle=True,
     )
+    #valid_dataloader = DataLoader(
+    #    valid_subset,
+    #    num_workers=cfg.training.num_workers,
+    #    pin_memory=cfg.training.pin_memory,
+    #    batch_size=cfg.training.batch_size,
+    #    shuffle=False,
+    #)
     valid_dataloader = DataLoader(
-        valid_subset,
-        num_workers=cfg.training.num_workers,
-        pin_memory=cfg.training.pin_memory,
-        batch_size=cfg.training.batch_size,
-        shuffle=False,
-    )
-    test_dataloader = DataLoader(
         test_dataset,
         num_workers=cfg.training.num_workers,
         pin_memory=cfg.training.pin_memory,
@@ -290,26 +334,25 @@ def main(cfg: DictConfig):
         )
     else:
         raise ValueError(f"Unknown training.scheduler='{scheduler_mode}'")
-    best_loss = float("inf")
+    best_pcc = 0
 
 
     # === Configure checkpoint and wandb logging ===
     ckpt_filename = f"{cfg.experiment_name}__{cfg.dataset_name}.pth"
     if cfg.ckpt_prefix is not None:
         ckpt_filename = f"{cfg.ckpt_prefix}_{ckpt_filename}"
-    checkpoint_path = f"{cfg.ckpt_dir}/{ckpt_filename}"
+    checkpoint_path = f"casf_val/{cfg.ckpt_dir}/{ckpt_filename}"
     logging.info(f"Checkpoint path set as: {checkpoint_path}")
 
-    start_epoch, run_id, best_model, best_loss = utils.load_checkpoint(
+    start_epoch, run_id, best_model, best_pcc = load_checkpoint(
         checkpoint_path, model, opt, sched, cfg.force_restart
     )
 
-    # ==== If eval only, evaluate and exit ====
     if cfg.eval_only:
         logger.info("Running evaluation only with best model")
-        evaluate(cfg, best_model, test_dataloader, device, mad, mean)
+        evaluate(cfg, best_model, valid_dataloader, device, mad, mean)
         return
-    # ==== otherwise continue training ====
+
 
     if start_epoch >= cfg.training.epochs:
         logger.info("Training already completed. Exiting.")
@@ -327,7 +370,7 @@ def main(cfg: DictConfig):
     wandb_config["num_params"] = num_params
 
     wandb.init(
-        project="pdbbind_regression",
+        project="pdbbind_casf_validation",
         name=f"{cfg.experiment_name}_{cfg.dataset_name}",
         entity=os.environ.get("WANDB_ENTITY"),
         config=wandb_config,
@@ -372,6 +415,8 @@ def main(cfg: DictConfig):
             batch_iter.set_postfix(loss=float(loss.item()), lr=current_lr(opt))  
         
         model.eval()
+        preds_cpu: list[torch.Tensor] = []
+        targets_cpu: list[torch.Tensor] = []
         with torch.no_grad():
             for _, batch in enumerate(valid_dataloader):
                 batch = batch.to(device)
@@ -381,9 +426,16 @@ def main(cfg: DictConfig):
                 denorm_pred = pred * mad + mean
                 val_mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
                 val_mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
+                preds_cpu.append(denorm_pred.detach().cpu())
+                targets_cpu.append(batch.y.detach().cpu())
                 #mae = crit(denorm_pred, batch.y)
                 epoch_mae_val += val_mae.item()
                 epoch_mse_val += val_mse.item()
+
+        preds = torch.cat(preds_cpu)   # on CPU
+        targets = torch.cat(targets_cpu)  # on CPU
+        pcc, pcc_pvalue = pearsonr(preds, targets)
+        tau, tau_pvalue = kendalltau(preds, targets, variant="b")  # (tau, p-value)
 
         epoch_mae_train /= len(train_dataloader)
         epoch_loss_train /= len(train_dataloader)
@@ -396,18 +448,18 @@ def main(cfg: DictConfig):
         else:
             sched.step()
 
-        if epoch_mae_val < best_loss:
-            best_loss = epoch_mae_val
+        if pcc > best_pcc:
+            best_pcc = pcc
             best_model = copy.deepcopy(model)
 
         # Save checkpoint
         if epoch % cfg.training.save_interval == 0:
             logger.info(f"Saving checkpoint at epoch {epoch + 1}")
-            utils.save_checkpoint(
+            save_checkpoint(
                 path=checkpoint_path,
                 model=model,
                 best_model=best_model,
-                best_loss=best_loss,
+                best_pcc=best_pcc,
                 opt=opt,
                 sched=sched,
                 epoch=epoch,
@@ -424,6 +476,8 @@ def main(cfg: DictConfig):
                 "Train MSE": epoch_mse_train,
                 "Validation MAE": epoch_mae_val,
                 "Validation MSE": epoch_mse_val,
+                "PCC": pcc,
+                "Kendalls Tau": tau,
                 "Epoch Duration": epoch_duration,
                 "Learning Rate": current_lr(opt),
             },
@@ -432,7 +486,7 @@ def main(cfg: DictConfig):
         epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val)
 
         if cfg.training.early_stop:
-            if epoch_mae_val > best_loss:
+            if epoch_mae_val > best_pcc:
                 early_stop_counter +=1
             else:
                 early_stop_counter = 0
@@ -443,27 +497,16 @@ def main(cfg: DictConfig):
 
     # Save final checkpoint
     logger.info("Saving final checkpoint...")
-    utils.save_checkpoint(
+    save_checkpoint(
         path=checkpoint_path,
         model=model,
         best_model=best_model,
-        best_loss=best_loss,
+        best_pcc=best_pcc,
         opt=opt,
         sched=sched,
         epoch=cfg.training.epochs - 1,
         run_id=run_id,
     )
-
-    # ==== Final test evaluation after training completion ====
-    logger.info("Training completed. Running final evaluation on test set...")
-
-    logger.info("Running evaluation with current model")
-    evaluate(cfg, model, test_dataloader, device, mad, mean)
-
-    logger.info("Running evaluation with best model")
-    evaluate(cfg, best_model, test_dataloader, device, mad, mean)
-    
-    logger.info("Training and evaluation completed successfully!")
 
 
 if __name__ == "__main__":

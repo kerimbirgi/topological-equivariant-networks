@@ -15,13 +15,13 @@ def main(cfg: DictConfig):
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[
-            logging.FileHandler("create_bindingnet.log", mode="w"),
+            logging.FileHandler("create_pdbbind.log", mode="w"),
             logging.StreamHandler()
         ]
     )
     logger = logging.getLogger(__name__)
     
-    logger.info("Starting BindingNet dataset creation")
+    logger.info("Starting pdbbind dataset creation")
     logger.info(f"Dataset: {cfg.dataset}")
     logger.info(f"Create single graphs: {cfg.dataset.create_single_graphs}")
     logger.info(f"Merge graphs: {cfg.dataset.merge_graphs}")

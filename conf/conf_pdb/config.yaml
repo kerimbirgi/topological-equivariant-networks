@@ -23,7 +23,7 @@ task_name: PDBBind
 dataset_name: ${hydra:runtime.choices.dataset}
 experiment_name: ${hydra:runtime.choices.experiment}
 results_dir: results_pdbbind
-eval_only: false
+eval_only: false 
 
 compile: false
 seed: 42
@@ -58,3 +58,5 @@ training:
   lambdalr: false
   num_workers: 8
   pin_memory: true
+  early_stop: false
+  normalize_targets: false

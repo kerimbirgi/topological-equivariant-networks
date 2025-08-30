@@ -1,0 +1,18 @@
+# @package _global_
+model:
+  num_hidden: 128
+
+training:
+  epochs: 200
+  batch_size: 64
+  weight_decay: 1e-16
+  scheduler_mode: 'cosine_annealing'
+  min_lr: 0.0
+  num_lr_cycles: 6
+  clip_gradients: true
+  clip_amount: 1.0
+  test_interval: 10
+  lr: 5e-4
+  crit: 'L1Loss'
+  early_stop: false
+  normalize_targets: false

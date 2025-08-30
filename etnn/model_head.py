@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch_geometric.data import Data
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
+from torch_geometric.utils import softmax
 
 from etnn.layers import ETNNLayer
 from etnn import utils, invariants
@@ -126,12 +127,19 @@ class ETNN(nn.Module):
                     self.pre_pool[str(dim)] = nn.Linear(num_hidden, num_out)
 
         if self.global_pool:
-            self.head = GatedMultiAggHead(
+            #self.head = GatedMultiAggHead(
+            #    num_hidden=num_hidden,
+            #    visible_dims=self.visible_dims,
+            #    num_out=num_out,
+            #    dropout=self.dropout if self.dropout > 0 else 0.1,  # small default
+            #    lean=self.lean,
+            #)
+            self.head = AttentiveHead(
                 num_hidden=num_hidden,
                 visible_dims=self.visible_dims,
                 num_out=num_out,
-                dropout=self.dropout if self.dropout > 0 else 0.1,  # small default
-                lean=self.lean,
+                dropout=self.dropout if self.dropout > 0 else 0.1,
+                use_multiagg=True,   # keep sum/mean/max alongside attention
             )
 
     def forward(self, graph: Data) -> Tensor:
@@ -298,4 +306,76 @@ class GatedMultiAggHead(nn.Module):
 
         state = torch.cat(rank_vecs, dim=1)           # [B, R*H]
         out = self.final(state)                       # [B, num_out]
+        return out.squeeze(-1) if out.shape[-1] == 1 else out
+    
+
+class GlobalAdditiveAttention(nn.Module):
+    def __init__(self, hidden: int):
+        super().__init__()
+        self.score = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.Tanh(),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(self, h: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
+        # h: [N, H], batch: [N] graph ids
+        s = self.score(h).squeeze(-1)         # [N]
+        a = softmax(s, batch)                  # [N], sums to 1 per graph
+        return global_add_pool(a.unsqueeze(-1) * h, batch)  # [B, H]
+
+
+class AttentiveHead(nn.Module):
+    """
+    Per-rank attention readout:
+      For each visible rank d:
+        att = Σ softmax(score(h_i)) * h_i      (additive attention)
+        (optionally) concat with sum/mean/max
+        rank_vec = Linear(concat) -> R^H
+      Concat rank_vec across ranks -> R*H
+      Final MLP -> R^{num_out}
+    """
+    def __init__(self, num_hidden: int, visible_dims: list[int], num_out: int,
+                 dropout: float = 0.1, use_multiagg: bool = True):
+        super().__init__()
+        self.visible_dims = [str(d) for d in visible_dims]
+        self.num_hidden = num_hidden
+        self.use_multiagg = use_multiagg
+
+        # per-rank attention scorer
+        self.attn = nn.ModuleDict({d: GlobalAdditiveAttention(num_hidden) for d in self.visible_dims})
+
+        in_per_rank = num_hidden * (4 if use_multiagg else 1)  # [sum, mean, max, att] or just [att]
+        self.rank_proj = nn.ModuleDict({d: nn.Linear(in_per_rank, num_hidden) for d in self.visible_dims})
+
+        layers = [
+            nn.LayerNorm(len(self.visible_dims) * num_hidden),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            nn.Linear(len(self.visible_dims) * num_hidden, num_hidden),
+            nn.SiLU(),
+        ]
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        layers.append(nn.Linear(num_hidden, num_out))
+        self.final = nn.Sequential(*layers)
+
+    def forward(self, per_rank_feats: dict[str, torch.Tensor],
+                per_rank_batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        rank_vecs = []
+        for d in self.visible_dims:
+            h = per_rank_feats[d]       # [N, H]
+            b = per_rank_batch[d]       # [N]
+            att_pool  = self.attn[d](h, b)  # [B, H]
+            if self.use_multiagg:
+                sum_pool  = global_add_pool(h, b)
+                mean_pool = global_mean_pool(h, b)
+                max_pool  = global_max_pool(h, b)
+                agg = torch.cat([sum_pool, mean_pool, max_pool, att_pool], dim=1)  # [B, 4H]
+            else:
+                agg = att_pool  # [B, H]
+            rank_vecs.append(self.rank_proj[d](agg))  # [B, H]
+
+        state = torch.cat(rank_vecs, dim=1)  # [B, R*H]
+        out = self.final(state)              # [B, num_out]
         return out.squeeze(-1) if out.shape[-1] == 1 else out

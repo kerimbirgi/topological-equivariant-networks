@@ -428,7 +428,9 @@ def merge_ligand_and_protein(
         edge_index=edge_index,
         edge_attr=edge_attr,
         origin_nodes=origin_nodes,      # handy for masking later
-        origin_edges=origin_edges
+        origin_edges=origin_edges,
+        ligand_mol=ligand.mol,
+        protein_mol=protein.mol
     )
     return merged
 

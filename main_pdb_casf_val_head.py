@@ -145,18 +145,18 @@ def main(cfg: DictConfig):
         force_reload=cfg.dataset.force_reload if 'force_reload' in cfg else False,
     )
     
-    if SPLIT_OOD:
-        train_subset, valid_subset = make_protein_ood_split(train_dataset)
-    else:
-        # deterministic 80/20 split
-        rng = np.random.default_rng(cfg.seed)
-        all_idx = np.arange(len(train_dataset), dtype=np.int64)
-        rng.shuffle(all_idx)
-        n_val = int(0.2 * len(all_idx))
-        val_idx = all_idx[:n_val]
-        train_idx = all_idx[n_val:]
-        train_subset = train_dataset.index_select(train_idx)
-        valid_subset = train_dataset.index_select(val_idx)
+    #if SPLIT_OOD:
+    #    train_subset, valid_subset = make_protein_ood_split(train_dataset)
+    #else:
+    #    # deterministic 80/20 split
+    #    rng = np.random.default_rng(cfg.seed)
+    #    all_idx = np.arange(len(train_dataset), dtype=np.int64)
+    #    rng.shuffle(all_idx)
+    #    n_val = int(0.2 * len(all_idx))
+    #    val_idx = all_idx[:n_val]
+    #    train_idx = all_idx[n_val:]
+    #    train_subset = train_dataset.index_select(train_idx)
+    #    valid_subset = train_dataset.index_select(val_idx)
 
     # Load casf as test set
     casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "casf.yaml")
@@ -187,20 +187,20 @@ def main(cfg: DictConfig):
 
     # Dataloaders
     train_dataloader = DataLoader(
-        train_subset,
+        train_dataset,
         num_workers=cfg.training.num_workers,
         pin_memory=cfg.training.pin_memory,
         batch_size=cfg.training.batch_size,
         shuffle=True,
     )
+    #valid_dataloader = DataLoader(
+    #    valid_subset,
+    #    num_workers=cfg.training.num_workers,
+    #    pin_memory=cfg.training.pin_memory,
+    #    batch_size=cfg.training.batch_size,
+    #    shuffle=False,
+    #)
     valid_dataloader = DataLoader(
-        valid_subset,
-        num_workers=cfg.training.num_workers,
-        pin_memory=cfg.training.pin_memory,
-        batch_size=cfg.training.batch_size,
-        shuffle=False,
-    )
-    test_dataloader = DataLoader(
         test_dataset,
         num_workers=cfg.training.num_workers,
         pin_memory=cfg.training.pin_memory,
@@ -297,19 +297,13 @@ def main(cfg: DictConfig):
     ckpt_filename = f"{cfg.experiment_name}__{cfg.dataset_name}.pth"
     if cfg.ckpt_prefix is not None:
         ckpt_filename = f"{cfg.ckpt_prefix}_{ckpt_filename}"
-    checkpoint_path = f"{cfg.ckpt_dir}/{ckpt_filename}"
+    checkpoint_path = f"casf_val/{cfg.ckpt_dir}/{ckpt_filename}"
     logging.info(f"Checkpoint path set as: {checkpoint_path}")
 
     start_epoch, run_id, best_model, best_loss = utils.load_checkpoint(
         checkpoint_path, model, opt, sched, cfg.force_restart
     )
 
-    # ==== If eval only, evaluate and exit ====
-    if cfg.eval_only:
-        logger.info("Running evaluation only with best model")
-        evaluate(cfg, best_model, test_dataloader, device, mad, mean)
-        return
-    # ==== otherwise continue training ====
 
     if start_epoch >= cfg.training.epochs:
         logger.info("Training already completed. Exiting.")
@@ -327,7 +321,7 @@ def main(cfg: DictConfig):
     wandb_config["num_params"] = num_params
 
     wandb.init(
-        project="pdbbind_regression",
+        project="pdbbind_casf_validation",
         name=f"{cfg.experiment_name}_{cfg.dataset_name}",
         entity=os.environ.get("WANDB_ENTITY"),
         config=wandb_config,
@@ -372,6 +366,8 @@ def main(cfg: DictConfig):
             batch_iter.set_postfix(loss=float(loss.item()), lr=current_lr(opt))  
         
         model.eval()
+        preds_cpu: list[torch.Tensor] = []
+        targets_cpu: list[torch.Tensor] = []
         with torch.no_grad():
             for _, batch in enumerate(valid_dataloader):
                 batch = batch.to(device)
@@ -381,9 +377,16 @@ def main(cfg: DictConfig):
                 denorm_pred = pred * mad + mean
                 val_mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
                 val_mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
+                preds_cpu.append(denorm_pred.detach().cpu())
+                targets_cpu.append(batch.y.detach().cpu())
                 #mae = crit(denorm_pred, batch.y)
                 epoch_mae_val += val_mae.item()
                 epoch_mse_val += val_mse.item()
+
+        preds = torch.cat(preds_cpu)   # on CPU
+        targets = torch.cat(targets_cpu)  # on CPU
+        pcc, pcc_pvalue = pearsonr(preds, targets)
+        tau, tau_pvalue = kendalltau(preds, targets, variant="b")  # (tau, p-value)
 
         epoch_mae_train /= len(train_dataloader)
         epoch_loss_train /= len(train_dataloader)
@@ -424,6 +427,8 @@ def main(cfg: DictConfig):
                 "Train MSE": epoch_mse_train,
                 "Validation MAE": epoch_mae_val,
                 "Validation MSE": epoch_mse_val,
+                "PCC": pcc,
+                "Kendalls Tau": tau,
                 "Epoch Duration": epoch_duration,
                 "Learning Rate": current_lr(opt),
             },
@@ -453,17 +458,6 @@ def main(cfg: DictConfig):
         epoch=cfg.training.epochs - 1,
         run_id=run_id,
     )
-
-    # ==== Final test evaluation after training completion ====
-    logger.info("Training completed. Running final evaluation on test set...")
-
-    logger.info("Running evaluation with current model")
-    evaluate(cfg, model, test_dataloader, device, mad, mean)
-
-    logger.info("Running evaluation with best model")
-    evaluate(cfg, best_model, test_dataloader, device, mad, mean)
-    
-    logger.info("Training and evaluation completed successfully!")
 
 
 if __name__ == "__main__":
