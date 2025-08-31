@@ -4,7 +4,7 @@ eval_only: false
 
 training:
   epochs: 200
-  batch_size: 16
+  batch_size: 1
   weight_decay: 1e-16
   scheduler_mode: 'cosine_warmup'
   optimizer: 'AdamW'
@@ -16,5 +16,5 @@ training:
   crit: 'MSE'
   early_stop: false
   normalize_targets: false
-  gradient_accumulate: false
+  gradient_accumulate: true
   

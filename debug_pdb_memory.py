@@ -13,17 +13,77 @@ from omegaconf import DictConfig, OmegaConf
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-import utils_head as utils
-import wandb
+import utils
 from etnn.pdbbind.pdbbind import PDBBindCC
 
-# torch.set_float32_matmul_precision("high")  # Use high precision for matmul
-os.environ["WANDB__SERVICE_WAIT"] = "600"
+
 
 SPLIT_OOD = True
 
 
 logger = logging.getLogger(__name__)
+
+def gpu_mem_stats(device=None):
+    if device is None:
+        device = torch.device('cuda', 0)
+    torch.cuda.synchronize(device)
+    alloc = torch.cuda.memory_allocated(device)          # bytes actually used by tensors
+    reserv = torch.cuda.memory_reserved(device)          # bytes reserved by the caching allocator
+    max_alloc = torch.cuda.max_memory_allocated(device)  # peak since reset
+    max_reserv = torch.cuda.max_memory_reserved(device)
+
+    to_mb = lambda x: round(x / (1024**2), 2)
+
+    return {
+        "alloc_MB": to_mb(alloc),
+        "reserved_MB": to_mb(reserv),
+        "max_alloc_MB": to_mb(max_alloc),
+        "max_reserved_MB": to_mb(max_reserv),
+    }
+
+def load_checkpoint(checkpoint_path, model, opt, sched, force_restart):
+    best_model = copy.deepcopy(model)
+    device = next(model.parameters()).device
+    if not force_restart and os.path.isfile(checkpoint_path):
+        print("Loading model from checkpoint!")
+        checkpoint = torch.load(checkpoint_path)
+        model.to("cpu")
+        best_model.to("cpu")
+        model.load_state_dict(checkpoint["model"])
+        best_model.load_state_dict(checkpoint["best_model"])
+        best_pcc = checkpoint["best_pcc"]
+        opt.load_state_dict(checkpoint["optimizer"])
+        sched.load_state_dict(checkpoint["scheduler"])
+        model.to(device)
+        best_model.to(device)
+        
+        # BUG FIX ATTEMPT: Ensure optimizer state is on the correct device
+        for state in opt.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
+        
+        return checkpoint["epoch"], checkpoint["run_id"], best_model, best_pcc
+    else:
+        return 0, None, best_model, 0
+
+def save_checkpoint(path, model, best_model, best_pcc, opt, sched, epoch, run_id):
+    device = next(model.parameters()).device
+    model.to("cpu")
+    best_model.to("cpu")
+    state = {
+        "epoch": epoch + 1,
+        "model": model.state_dict(),
+        "best_model": best_model.state_dict(),
+        "best_pcc": best_pcc,
+        "optimizer": opt.state_dict(),
+        "scheduler": sched.state_dict(),
+        "run_id": run_id,
+    }
+    model.to(device)
+    best_model.to(device)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(state, path)
 
 def make_protein_ood_split(dataset, val_frac=0.2, seed=42):
     N = len(dataset)
@@ -62,7 +122,7 @@ def make_protein_ood_split(dataset, val_frac=0.2, seed=42):
 def current_lr(opt):
     return opt.param_groups[0]["lr"]
 
-def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean, results_dir = "results_casf_val_head"):
+def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean, results_dir="results_casf_val"):
     os.makedirs(results_dir, exist_ok=True)
 
     # ==== Evaluation ====
@@ -144,20 +204,33 @@ def main(cfg: DictConfig):
         r_cut=cfg.dataset.r_cut,
         force_reload=cfg.dataset.force_reload if 'force_reload' in cfg else False,
     )
+    
+    #if SPLIT_OOD:
+    #    train_subset, valid_subset = make_protein_ood_split(train_dataset)
+    #else:
+    #    # deterministic 80/20 split
+    #    rng = np.random.default_rng(cfg.seed)
+    #    all_idx = np.arange(len(train_dataset), dtype=np.int64)
+    #    rng.shuffle(all_idx)
+    #    n_val = int(0.2 * len(all_idx))
+    #    val_idx = all_idx[:n_val]
+    #    train_idx = all_idx[n_val:]
+    #    train_subset = train_dataset.index_select(train_idx)
+    #    valid_subset = train_dataset.index_select(val_idx)
 
     # Load casf as test set
-    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", f"{cfg.dataset.casf_dataset}.yaml")
+    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "dataset", f"{cfg.dataset.casf_dataset}.yaml")
     casf_config: DictConfig = OmegaConf.load(casf_cfg_path)
     test_dataset = PDBBindCC(
-        index=casf_config.dataset.index,
-        root=f"data/pdbbind/{casf_config.dataset_name}",
-        lifters=list(casf_config.dataset.lifters),
-        neighbor_types=list(casf_config.dataset.neighbor_types),
-        connectivity=casf_config.dataset.connectivity,
-        supercell=casf_config.dataset.supercell,
-        connect_cross=casf_config.dataset.connect_cross,
-        r_cut=casf_config.dataset.r_cut,
-        force_reload=casf_config.dataset.force_reload if 'force_reload' in casf_config.dataset else False,
+        index=casf_config.index,
+        root=f"data/pdbbind/{cfg.dataset.casf_dataset}",
+        lifters=list(casf_config.lifters),
+        neighbor_types=list(casf_config.neighbor_types),
+        connectivity=casf_config.connectivity,
+        supercell=casf_config.supercell,
+        connect_cross=casf_config.connect_cross,
+        r_cut=casf_config.r_cut,
+        force_reload=casf_config.force_reload if 'force_reload' in casf_config else False,
     )
 
     logger.info("Dataset loaded!")
@@ -277,7 +350,7 @@ def main(cfg: DictConfig):
         )
     else:
         raise ValueError(f"Unknown training.scheduler='{scheduler_mode}'")
-    best_loss = float("inf")
+    best_pcc = 0
 
 
     # === Configure checkpoint and wandb logging ===
@@ -287,71 +360,103 @@ def main(cfg: DictConfig):
     checkpoint_path = f"casf_val/{cfg.ckpt_dir}/{ckpt_filename}"
     logging.info(f"Checkpoint path set as: {checkpoint_path}")
 
-    start_epoch, run_id, best_model, best_loss = utils.load_checkpoint(
+    start_epoch, run_id, best_model, best_pcc = load_checkpoint(
         checkpoint_path, model, opt, sched, cfg.force_restart
     )
+
+    if cfg.eval_only:
+        logger.info("Running evaluation only with best model")
+        evaluate(cfg, best_model, valid_dataloader, device, mad, mean)
+        return
 
 
     if start_epoch >= cfg.training.epochs:
         logger.info("Training already completed. Exiting.")
         return
-    
-    # init wandb logger
-    if run_id is None:
-        run_id = ckpt_filename.split(".")[0] + "__" + wandb.util.generate_id()
-        if cfg.ckpt_prefix is not None:
-            run_id = "__".join([cfg.ckpt_prefix, run_id])
 
-    # create wandb config and add number of parameters
-    wandb_config = OmegaConf.to_container(cfg, resolve=True)
-    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    wandb_config["num_params"] = num_params
 
-    wandb.init(
-        project="pdbbind_casf_validation",
-        name=f"{cfg.experiment_name}_{cfg.dataset_name}",
-        entity=os.environ.get("WANDB_ENTITY"),
-        config=wandb_config,
-        id=run_id,
-        resume="allow",
-    )
 
 
     # === Training loop ===
+    print(f"Memory useage pre Training: {gpu_mem_stats(device)}")
     num_epochs=cfg.training.epochs
     early_stop_counter = 0
+
+    accumulation_steps = 8
+    effective_batch_size = cfg.training.batch_size * accumulation_steps
+
     epoch_iter = tqdm(range(start_epoch, cfg.training.epochs), desc="Epochs", position=0)
     for epoch in epoch_iter:
         epoch_start_time, epoch_mae_train, epoch_mse_train, epoch_loss_train, epoch_mae_val, epoch_mse_val = time.time(), 0, 0, 0, 0, 0
 
         model.train()
         batch_iter = tqdm(train_dataloader, desc=f"Train {epoch+1}/{num_epochs}", position=1, leave=False)
-        for batch in batch_iter:
-            opt.zero_grad(set_to_none=True)
-            batch = batch.to(device)
+        for batch_idx, batch in enumerate(batch_iter):
 
-            pred = model(batch)
+            if batch_idx % 20 == 0:
+                print(f"Memory batch_idx {batch_idx}: {gpu_mem_stats(device)}")
+
+            if cfg.training.gradient_accumulate:
+                # Only zero gradients at start of accumulation cycle
+                if batch_idx % accumulation_steps == 0:
+                    opt.zero_grad(set_to_none=True)
+            else:
+                # Always zero gradients when not accumulating
+                opt.zero_grad(set_to_none=True)
+            batch = batch.to(device)
+            try:
+                pred = model(batch)
+            except Exception as e:
+                raise Exception(f"Forward pass failed for id's {batch.id}")
             loss = crit(pred, (batch.y - mean) / mad)
+
+            if cfg.training.gradient_accumulate:
+                loss = loss / accumulation_steps
             
-            denorm_pred = pred * mad + mean
-            mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
-            mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
             loss.backward()
+
 
             if cfg.training.clip_gradients:
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), cfg.training.clip_amount
                 )
+            
+            should_step = False
+            if cfg.training.gradient_accumulate:
+                # Only step when accumulation cycle is complete
+                if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(train_dataloader):
+                    should_step = True
+            else:
+                # Always step when not accumulating
+                should_step = True
+                
+            if should_step:
+                opt.step()
+                torch.cuda.empty_cache()
 
-            opt.step()
+            denorm_pred = pred * mad + mean
+            mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
+            mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
 
-            epoch_loss_train += loss.item()
+            # Scale loss back up for logging
+            actual_loss = loss.item() * accumulation_steps if cfg.training.gradient_accumulate else loss.item()
+            epoch_loss_train += actual_loss
             epoch_mae_train += mae.item()
             epoch_mse_train += mse.item()
+            
+            
+            # CRITICAL: Additional cleanup for memory-intensive adjacencies
+            if batch_idx % 10 == 0:  # Every 10 batches
+                import gc
+                #del pred, loss, mae, mse, denorm_pred  # Explicit cleanup
+                gc.collect()
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
 
 
             batch_iter.set_postfix(loss=float(loss.item()), lr=current_lr(opt))  
         
+        print(f"Memory useage post Training, pre eval, epoch {epoch+1}: {gpu_mem_stats(device)}")
         model.eval()
         preds_cpu: list[torch.Tensor] = []
         targets_cpu: list[torch.Tensor] = []
@@ -386,18 +491,18 @@ def main(cfg: DictConfig):
         else:
             sched.step()
 
-        if epoch_mae_val < best_loss:
-            best_loss = epoch_mae_val
+        if pcc > best_pcc:
+            best_pcc = pcc
             best_model = copy.deepcopy(model)
 
         # Save checkpoint
         if epoch % cfg.training.save_interval == 0:
             logger.info(f"Saving checkpoint at epoch {epoch + 1}")
-            utils.save_checkpoint(
+            save_checkpoint(
                 path=checkpoint_path,
                 model=model,
                 best_model=best_model,
-                best_loss=best_loss,
+                best_pcc=best_pcc,
                 opt=opt,
                 sched=sched,
                 epoch=epoch,
@@ -407,24 +512,13 @@ def main(cfg: DictConfig):
         epoch_end_time = time.time()
         epoch_duration = epoch_end_time - epoch_start_time
 
-        wandb.log(
-            {
-                "Train Loss": epoch_loss_train,
-                "Train MAE": epoch_mae_train,
-                "Train MSE": epoch_mse_train,
-                "Validation MAE": epoch_mae_val,
-                "Validation MSE": epoch_mse_val,
-                "PCC": pcc,
-                "Kendalls Tau": tau,
-                "Epoch Duration": epoch_duration,
-                "Learning Rate": current_lr(opt),
-            },
-            step=epoch,
-        )
+        print(f"Memory useage post Training, post eval, epoch {epoch+1}: {gpu_mem_stats(device)}")
+
+
         epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val)
 
         if cfg.training.early_stop:
-            if epoch_mae_val > best_loss:
+            if epoch_mae_val > best_pcc:
                 early_stop_counter +=1
             else:
                 early_stop_counter = 0
@@ -435,11 +529,11 @@ def main(cfg: DictConfig):
 
     # Save final checkpoint
     logger.info("Saving final checkpoint...")
-    utils.save_checkpoint(
+    save_checkpoint(
         path=checkpoint_path,
         model=model,
         best_model=best_model,
-        best_loss=best_loss,
+        best_pcc=best_pcc,
         opt=opt,
         sched=sched,
         epoch=cfg.training.epochs - 1,
@@ -448,6 +542,7 @@ def main(cfg: DictConfig):
 
     evaluate(cfg, best_model, valid_dataloader, device, mad, mean)
 
+ 
 
 if __name__ == "__main__":
     main()

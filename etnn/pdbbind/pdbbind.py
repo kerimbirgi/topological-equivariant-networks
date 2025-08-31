@@ -30,7 +30,8 @@ class PDBBindCC(InMemoryDataset):
         connect_cross: bool = False,
         r_cut: float = 5.0,
         merge_graphs: bool = False,
-        preprocessed_graphs_path: str = "data/pdbbind/general_no_supercell_no_crossconnect/preprocessed",
+        single_graphs_path: str = "data/pdbbind/general_no_supercell_no_crossconnect/preprocessed",
+        merged_graphs_path: str = None,
         # merge_neighbors: str,
         supercell: Optional[bool] = False,
         transform: Optional[Callable] = None,
@@ -41,7 +42,8 @@ class PDBBindCC(InMemoryDataset):
     ) -> None:
         self.index = index
         self.merge_graphs = merge_graphs
-        self.preprocessed_graphs_path = preprocessed_graphs_path
+        self.single_graphs_path = single_graphs_path
+        self.merged_graphs_path = merged_graphs_path
         self.lifters = lifters
         self.neighbor_types = neighbor_types
         self.connectivity = connectivity
@@ -93,15 +95,19 @@ class PDBBindCC(InMemoryDataset):
         )
         logger.info(f"Created CombinatorialComplexTransform with lifters: {self.lifters}")
 
-        merged_data_path_root = os.path.join(self.root, f'preprocessed/merged')
+        if self.merged_graphs_path == None:
+            merged_data_path_root = os.path.join(self.root, f'preprocessed/merged')
+        else: 
+            merged_data_path_root = os.path.join(self.merged_graphs_path, f'merged')
         logger.info(f"Merged data path: {merged_data_path_root}")
 
         if self.merge_graphs:
             logger.info("Creating merged graphs from existing ligand and protein graphs")
+            logger.info(f"Single graphs path: {self.single_graphs_path}")
             os.makedirs(merged_data_path_root, exist_ok=True)
             create_graphs_from_dataset(
                 df, 
-                self.preprocessed_graphs_path, 
+                self.single_graphs_path, 
                 merged_data_path_root,
                 self.connect_cross,
                 self.r_cut,

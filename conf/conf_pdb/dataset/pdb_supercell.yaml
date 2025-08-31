@@ -1,0 +1,15 @@
+index: "/data2/PDBBind/processed/indexes/Index_pdbbind_general.csv"
+single_graphs_path: "/data2/PDBBind/processed/etnn/base_graphs_simple"
+merged_graphs_path: "/data2/PDBBind/processed/etnn/base_graphs_simple" 
+supercell: true
+casf_dataset: "casf_supercell"
+#neighbor_types: ["max"]  # Subset of ["+1", "-1", "min", "max"]
+#connectivity: "self"  # Choice in [self, all_to_all]
+connectivity: "all_to_all"
+neighbor_types: ["+1"]
+# BindingNet stuff
+connect_cross: false
+r_cut: 0
+merge_graphs: true
+force_reload: false
+create_single_graphs: false

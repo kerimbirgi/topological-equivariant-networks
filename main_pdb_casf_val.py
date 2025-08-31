@@ -25,6 +25,24 @@ SPLIT_OOD = True
 
 logger = logging.getLogger(__name__)
 
+def gpu_mem_stats(device=None):
+    if device is None:
+        device = torch.device('cuda', 0)
+    torch.cuda.synchronize(device)
+    alloc = torch.cuda.memory_allocated(device)          # bytes actually used by tensors
+    reserv = torch.cuda.memory_reserved(device)          # bytes reserved by the caching allocator
+    max_alloc = torch.cuda.max_memory_allocated(device)  # peak since reset
+    max_reserv = torch.cuda.max_memory_reserved(device)
+
+    to_mb = lambda x: round(x / (1024**2), 2)
+
+    return {
+        "alloc_MB": to_mb(alloc),
+        "reserved_MB": to_mb(reserv),
+        "max_alloc_MB": to_mb(max_alloc),
+        "max_reserved_MB": to_mb(max_reserv),
+    }
+
 def load_checkpoint(checkpoint_path, model, opt, sched, force_restart):
     best_model = copy.deepcopy(model)
     device = next(model.parameters()).device
@@ -106,8 +124,8 @@ def make_protein_ood_split(dataset, val_frac=0.2, seed=42):
 def current_lr(opt):
     return opt.param_groups[0]["lr"]
 
-def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
-    os.makedirs(cfg.results_dir, exist_ok=True)
+def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean, results_dir="results_casf_val"):
+    os.makedirs(results_dir, exist_ok=True)
 
     # ==== Evaluation ====
     logging.info(f"Evaluating model...\nTest samples:  {len(test_dataloader.dataset)}")
@@ -136,7 +154,7 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
         'predictions': denorm_preds.numpy().ravel(),
         'targets': targets.numpy().ravel(),
     })
-    df.to_csv(os.path.join(cfg.results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_predictions.csv'), index=False)
+    df.to_csv(os.path.join(results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_predictions.csv'), index=False)
 
     # Compute metrics on CPU
     mae = torch.nn.functional.l1_loss(denorm_preds, targets, reduction='mean')
@@ -147,7 +165,7 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     predictions_range = f"[{torch.min(denorm_preds)}, {torch.max(denorm_preds)}]"
     targets_range = f"[{torch.min(targets)}, {torch.max(targets)}]"
 
-    with open(os.path.join(cfg.results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_evaluation.txt'), 'w') as f:
+    with open(os.path.join(results_dir, f'{cfg.experiment_name}_{cfg.dataset_name}_evaluation.txt'), 'w') as f:
         f.write(f"Test MAE: {mae.item()}\n")
         f.write(f"Test MSE: {mse.item()}\n")
         f.write(f"Test RMSE: {rmse.item()}\n")
@@ -203,18 +221,18 @@ def main(cfg: DictConfig):
     #    valid_subset = train_dataset.index_select(val_idx)
 
     # Load casf as test set
-    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", f"{cfg.dataset.casf_dataset}.yaml")
+    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "dataset", f"{cfg.dataset.casf_dataset}.yaml")
     casf_config: DictConfig = OmegaConf.load(casf_cfg_path)
     test_dataset = PDBBindCC(
-        index=casf_config.dataset.index,
-        root=f"data/pdbbind/{casf_config.dataset_name}",
-        lifters=list(casf_config.dataset.lifters),
-        neighbor_types=list(casf_config.dataset.neighbor_types),
-        connectivity=casf_config.dataset.connectivity,
-        supercell=casf_config.dataset.supercell,
-        connect_cross=casf_config.dataset.connect_cross,
-        r_cut=casf_config.dataset.r_cut,
-        force_reload=casf_config.dataset.force_reload if 'force_reload' in casf_config.dataset else False,
+        index=casf_config.index,
+        root=f"data/pdbbind/{cfg.dataset.casf_dataset}",
+        lifters=list(casf_config.lifters),
+        neighbor_types=list(casf_config.neighbor_types),
+        connectivity=casf_config.connectivity,
+        supercell=casf_config.supercell,
+        connect_cross=casf_config.connect_cross,
+        r_cut=casf_config.r_cut,
+        force_reload=casf_config.force_reload if 'force_reload' in casf_config else False,
     )
 
     logger.info("Dataset loaded!")
@@ -380,15 +398,17 @@ def main(cfg: DictConfig):
 
 
     # === Training loop ===
+    print(f"Memory useage pre Training: {gpu_mem_stats(device)}")
     num_epochs=cfg.training.epochs
     early_stop_counter = 0
     epoch_iter = tqdm(range(start_epoch, cfg.training.epochs), desc="Epochs", position=0)
     for epoch in epoch_iter:
         epoch_start_time, epoch_mae_train, epoch_mse_train, epoch_loss_train, epoch_mae_val, epoch_mse_val = time.time(), 0, 0, 0, 0, 0
-
+        
         model.train()
         batch_iter = tqdm(train_dataloader, desc=f"Train {epoch+1}/{num_epochs}", position=1, leave=False)
         for batch in batch_iter:
+            
             opt.zero_grad(set_to_none=True)
             batch = batch.to(device)
             try:
@@ -416,6 +436,7 @@ def main(cfg: DictConfig):
 
             batch_iter.set_postfix(loss=float(loss.item()), lr=current_lr(opt))  
         
+        print(f"Memory useage post Training, pre eval, epoch {epoch+1}: {gpu_mem_stats(device)}")
         model.eval()
         preds_cpu: list[torch.Tensor] = []
         targets_cpu: list[torch.Tensor] = []
@@ -471,6 +492,8 @@ def main(cfg: DictConfig):
         epoch_end_time = time.time()
         epoch_duration = epoch_end_time - epoch_start_time
 
+        print(f"Memory useage post Training, post eval, epoch {epoch+1}: {gpu_mem_stats(device)}")
+
         wandb.log(
             {
                 "Train Loss": epoch_loss_train,
@@ -510,8 +533,9 @@ def main(cfg: DictConfig):
         run_id=run_id,
     )
 
-    evaluate(cfg, model, valid_dataloader, device, mad, mean)
+    evaluate(cfg, best_model, valid_dataloader, device, mad, mean)
 
+ 
 
 if __name__ == "__main__":
     main()

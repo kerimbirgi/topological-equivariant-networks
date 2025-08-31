@@ -26,6 +26,7 @@ def main(cfg: DictConfig):
     logger.info(f"Create single graphs: {cfg.dataset.create_single_graphs}")
     logger.info(f"Merge graphs: {cfg.dataset.merge_graphs}")
     logger.info(f"Force reload: {cfg.dataset.force_reload}")
+    logger.info(f"Single graphs path: {cfg.dataset.single_graphs_path}")
 
     if 'single_graphs_path' in cfg.dataset and cfg.dataset.create_single_graphs:
         create_single_graphs(cfg.dataset.index, cfg.dataset.single_graphs_path)
@@ -39,7 +40,8 @@ def main(cfg: DictConfig):
         supercell=cfg.dataset.supercell,
         connect_cross=cfg.dataset.connect_cross,
         r_cut=cfg.dataset.r_cut,
-        preprocessed_graphs_path=cfg.dataset.single_graphs_path if 'single_graphs_path' in cfg.dataset else '/data2/PDBBind/processed/etnn/base_graphs_simple',
+        single_graphs_path=cfg.dataset.single_graphs_path if 'single_graphs_path' in cfg.dataset else '/data2/PDBBind/processed/etnn/base_graphs_simple',
+        merged_graphs_path=cfg.dataset.merged_graphs_path if "merged_graphs_path" in cfg.dataset else None,
         force_reload=cfg.dataset.force_reload if 'force_reload' in cfg.dataset else False,
         merge_graphs=cfg.dataset.merge_graphs if 'merge_graphs' in cfg.dataset else False
     )
