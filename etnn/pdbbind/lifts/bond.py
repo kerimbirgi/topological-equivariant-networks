@@ -2,7 +2,9 @@ from torch_geometric.data import Data
 from etnn.combinatorial_data import Cell
 
 # Base features: 7 bond type + conjugation + ring + length = 10
-BASE_FEATURES = 10
+M_RBF = 16
+K_INTER = 5
+BASE_FEATURES = 9 + M_RBF
 
 def _bond_lift_core(graph: Data) -> set[Cell]:
     """Core bond lifting logic shared by both lifters."""
@@ -29,5 +31,5 @@ def bond_lift_cross(graph: Data) -> set[Cell]:
     return _bond_lift_core(graph)
 
 # Set feature counts explicitly
-bond_lift.num_features = BASE_FEATURES + 2        # 10 + 2 = 12 features (no cross)
-bond_lift_cross.num_features = BASE_FEATURES + 3  # 10 + 3 = 13 features (with cross)
+bond_lift.num_features       = BASE_FEATURES + K_INTER + 2  # no cross: +2 type one-hot
+bond_lift_cross.num_features = BASE_FEATURES + K_INTER + 3  # with cross: +3 type one-hot

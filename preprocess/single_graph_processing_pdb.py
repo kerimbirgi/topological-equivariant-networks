@@ -14,8 +14,29 @@ import sys
 import numpy as np
 from rdkit.Chem import ChemicalFeatures
 from rdkit import RDConfig
+import math
 
 logger = logging.getLogger(__name__)
+
+def cosine_envelope(d, r_cut):
+    # d: (E,1) or (E,)
+    x = d / r_cut
+    env = 0.5 * (torch.cos(math.pi * x).clamp(min=-1.0, max=1.0) + 1.0)
+    env = env * (d <= r_cut)
+    return env
+
+def rbf_expand(d, r_cut, M=16, eps=1e-8):
+    """
+    d: (E,1) or (E,) distances in Å
+    returns: (E, M) Gaussian RBFs with cosine envelope.
+    """
+    if d.ndim == 1: d = d.unsqueeze(1)     # (E,1)
+    centers = torch.linspace(0.0, r_cut, M, device=d.device).view(1, M)  # (1,M)
+    delta = r_cut / max(M-1, 1)
+    gamma = 1.0 / (delta**2 + eps)
+    rbf = torch.exp(-gamma * (d - centers)**2)  # (E,M)
+    rbf = rbf * cosine_envelope(d, r_cut)       # smooth cutoff
+    return rbf
 
 _FDEF = os.path.join(RDConfig.RDDataDir, "BaseFeatures.fdef")
 _FEAT_FACTORY = ChemicalFeatures.BuildFeatureFactory(_FDEF)
@@ -81,9 +102,14 @@ BOND_TYPES = {
 # Fallback bond type for any bonds not in BOND_TYPES
 FALLBACK_BOND_TYPE = BT.UNSPECIFIED
 
+
+# ==== RBF config ====
+M_RBF = 16          # number of radial bases
+R_CUT_BOND = 3.0    # covers covalent bond lengths comfortably
+
 # Expected feature dimensions for validation
-EXPECTED_NODE_FEATURES = 13  # 6 basic atom properties + 7 hybridization one-hot
-EXPECTED_EDGE_FEATURES = 10  # 7 bond types + is_conj + in_ring + length
+EXPECTED_NODE_FEATURES = 13         # unchanged
+EXPECTED_EDGE_FEATURES = 9 + M_RBF
 
 PREFER_MOL2 = True
 def process_ligand_sdf(sdf_path: str) -> Data:
@@ -185,13 +211,17 @@ def process_ligand_sdf(sdf_path: str) -> Data:
         is_conj = [1 if bond.GetIsConjugated() else 0]
 
         # ring edge flag
-        in_ring = [1 if bond.IsInRing() else 0]
+        in_ring = [int(bond.IsInRing())]
 
         p1, p2 = mol.GetConformer().GetAtomPosition(start), mol.GetConformer().GetAtomPosition(end)
-        length = [p1.Distance(p2)]
+        length_val = p1.Distance(p2)
+        length_t = torch.tensor([length_val], dtype=torch.float32)
+        rbf_len   = rbf_expand(length_t, r_cut=R_CUT_BOND, M=M_RBF)
 
-        feats = bt_oh + is_conj + in_ring + length
-        edge_feat_list += [feats, feats]
+        feats_base = torch.tensor(bt_oh + is_conj + in_ring, dtype=torch.float32).unsqueeze(0)  # (1,9)
+        feats = torch.cat([feats_base, rbf_len], dim=1).squeeze(0)
+
+        edge_feat_list += [feats.tolist(), feats.tolist()]
         
 
     edge_index = torch.tensor([rows, cols], dtype=torch.long)  # [2, E]
@@ -272,11 +302,20 @@ def process_protein_pdb_ligand_style(pdb_path: str) -> Data:
         bt_idx = BOND_TYPES.get(bond.GetBondType(), BOND_TYPES[FALLBACK_BOND_TYPE])
         bt_oh = [int(i == bt_idx) for i in range(len(BOND_TYPES))]
         is_conj = [int(bond.GetIsConjugated())]
-        ring_flag = [int(bond.IsInRing())]
+        in_ring = [int(bond.IsInRing())]
         p1, p2 = conf.GetAtomPosition(start), conf.GetAtomPosition(end)
-        length = [p1.Distance(p2)]
-        feats = bt_oh + is_conj + ring_flag + length
-        edge_feat_list += [feats, feats]
+        # scalar length -> RBF
+        length_val = p1.Distance(p2)
+        length_t = torch.tensor([length_val], dtype=torch.float32)        # (1,)
+        rbf_len   = rbf_expand(length_t, r_cut=R_CUT_BOND, M=M_RBF)       # (1, M_RBF)
+
+        # categorical part: 7 bond types + 1 conjugation + 1 ring = 9
+        feats_base = torch.tensor(bt_oh + is_conj + in_ring, dtype=torch.float32).unsqueeze(0)  # (1, 9)
+
+        # final per-direction edge feature: (9 + M_RBF,)
+        feats = torch.cat([feats_base, rbf_len], dim=1).squeeze(0)
+
+        edge_feat_list += [feats.tolist(), feats.tolist()]
 
     edge_index = torch.tensor([rows, cols], dtype=torch.long)
     
@@ -473,14 +512,14 @@ def merge_ligand_and_protein(
         ], dim=1).to(torch.float)   # (E_cross, K_INTER)
 
         # ------- assemble cross-edge features -------
-        # Your original per-bond edge features had size original_edge_feat_dim (=10).
-        # We mimic that layout as zeros for the 9 non-distance slots + distance at the end.
-        original_edge_feat_dim = ligand.edge_attr.size(1)  # should be 10 in your setup
+        # RBF for cross-distance using the SAME M_RBF and r_cut as your cross cutoff
+        rbf_cross = rbf_expand(dist, r_cut=r_cut, M=M_RBF)  # (E_cross, M_RBF)
 
-        cross_attr_base = torch.cat([
-            torch.zeros(dist.size(0), original_edge_feat_dim - 1, dtype=torch.float),
-            dist
-        ], dim=1)  # (E_cross, 10)
+        # keep the first 9 "bond categorical" slots as zeros for cross edges
+        base_zeros = torch.zeros(rbf_cross.size(0), 9, dtype=torch.float, device=dist.device)
+
+        # cross base matches intra layout: [9 zeros] + [RBF(dist)]
+        cross_attr_base = torch.cat([base_zeros, rbf_cross], dim=1)  # (E_cross, 9+M_RBF)
 
         # add interaction flags then type one-hot [0,0,1]
         cross_type = torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float).repeat(dist.size(0), 1)
