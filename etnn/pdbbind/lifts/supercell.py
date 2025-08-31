@@ -145,10 +145,14 @@ def supercell_lift(graph: Data) -> set[Cell]:
     centroid_distance = torch.norm(ligand_centroid - protein_centroid)
     
     # ================================================================
-    # ASSEMBLE FEATURE VECTOR
+    # ASSEMBLE FEATURE VECTOR WITH NORMALIZATION
     # ================================================================
     
-    features = (
+    # Normalize features to prevent massive scaling issues
+    # Apply log normalization to volume-based features to reduce their scale
+    import math
+    
+    raw_features = [
         num_contacts.item(),                    # 1. Number of interface contacts
         avg_contact_distance.item(),            # 2. Average contact distance
         min_lig_prot_distance.item(),          # 3. Minimum ligand-protein distance
@@ -161,7 +165,25 @@ def supercell_lift(graph: Data) -> set[Cell]:
         interface_surface_area,                 # 10. Interface surface area estimate
         float(num_ligand),                     # 11. Number of ligand atoms
         float(num_protein),                    # 12. Number of protein atoms
-    )
+    ]
+    
+    # Apply feature-specific normalization to prevent scaling issues
+    normalized_features = [
+        raw_features[0] / 100.0,                           # 1. Scale contacts to ~0-10 range
+        raw_features[1],                                   # 2. Distance already reasonable scale
+        raw_features[2],                                   # 3. Distance already reasonable scale  
+        raw_features[3],                                   # 4. Ratio already reasonable scale
+        math.log(raw_features[4] + 1.0),                  # 5. Log-scale ligand volume
+        math.log(raw_features[5] + 1.0),                  # 6. Log-scale protein volume
+        raw_features[6],                                   # 7. Ratio already reasonable scale
+        raw_features[7],                                   # 8. Compactness already reasonable scale
+        raw_features[8],                                   # 9. Distance already reasonable scale
+        math.log(raw_features[9] + 1.0),                  # 10. Log-scale surface area
+        raw_features[10] / 100.0,                         # 11. Scale ligand atoms to ~0-10 range
+        raw_features[11] / 1000.0,                        # 12. Scale protein atoms to ~0-10 range
+    ]
+    
+    features = tuple(normalized_features)
     
     # Create supercell containing all nodes
     all_nodes = frozenset(range(num_nodes))
