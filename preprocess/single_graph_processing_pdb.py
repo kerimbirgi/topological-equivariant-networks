@@ -11,25 +11,59 @@ import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import logging
 import sys
-#from rdkit.Chem import rdFreeSASA
-#from rdkit.Chem import Crippen
+import numpy as np
+from rdkit.Chem import ChemicalFeatures
+from rdkit import RDConfig
 
 logger = logging.getLogger(__name__)
 
-"""
-# Build feature factory once
-fdef = os.path.join(RDConfig.RDDataDir, "BaseFeatures.fdef")
-feat_factory = ChemicalFeatures.BuildFeatureFactory(fdef)
+_FDEF = os.path.join(RDConfig.RDDataDir, "BaseFeatures.fdef")
+_FEAT_FACTORY = ChemicalFeatures.BuildFeatureFactory(_FDEF)
 
-def donor_acceptor_masks(mol):
-    donors, acceptors = set(), set()
-    for f in feat_factory.GetFeaturesForMol(mol):
-        if f.GetFamily() == "Donor":
-            donors.update(f.GetAtomIds())
-        elif f.GetFamily() == "Acceptor":
-            acceptors.update(f.GetAtomIds())
-    return donors, acceptors
-"""
+def _atom_flags_pharmacophore(mol: Chem.Mol) -> dict[str, torch.Tensor]:
+    """
+    Returns boolean (uint8) tensors of shape [N] for:
+      donor, acceptor, aromatic, cationic, anionic, hydrophobe
+    Notes:
+      - 'aromatic' uses RDKit atom aromaticity.
+      - 'cationic'/'anionic' are from formal charge (fallback, simple but robust).
+      - 'hydrophobe' is a very coarse heuristic: non-polar atom types (C,S,F,Cl,Br,I and not charged).
+    """
+    N = mol.GetNumAtoms()
+    donors = np.zeros(N, dtype=np.uint8)
+    acceptors = np.zeros(N, dtype=np.uint8)
+
+    # RDKit pharmacophore features (donor/acceptor)
+    for f in _FEAT_FACTORY.GetFeaturesForMol(mol):
+        fam = f.GetFamily()
+        if fam == "Donor":
+            for idx in f.GetAtomIds():
+                donors[idx] = 1
+        elif fam == "Acceptor":
+            for idx in f.GetAtomIds():
+                acceptors[idx] = 1
+
+    aromatic = np.array([int(a.GetIsAromatic()) for a in mol.GetAtoms()], dtype=np.uint8)
+    charges  = np.array([int(a.GetFormalCharge() or 0) for a in mol.GetAtoms()], dtype=np.int8)
+
+    cationic = (charges > 0).astype(np.uint8)
+    anionic  = (charges < 0).astype(np.uint8)
+
+    # very coarse hydrophobe tag: carbon/non-polar halogens/sulfur w/ no formal charge
+    non_polar_atomic_nums = {6, 9, 17, 35, 53, 16}  # C, F, Cl, Br, I, S
+    hydrophobe = np.array([
+        1 if (a.GetAtomicNum() in non_polar_atomic_nums and charges[i] == 0) else 0
+        for i, a in enumerate(mol.GetAtoms())
+    ], dtype=np.uint8)
+
+    return {
+        "donor":      torch.from_numpy(donors),
+        "acceptor":   torch.from_numpy(acceptors),
+        "aromatic":   torch.from_numpy(aromatic),
+        "cationic":   torch.from_numpy(cationic),
+        "anionic":    torch.from_numpy(anionic),
+        "hydrophobe": torch.from_numpy(hydrophobe),
+    }
 
 HYB_TYPES = ['UNSPECIFIED','S','SP','SP2','SP3','SP3D','SP3D2']
 # Bond type to index mapping (used for one-hot encoding)
@@ -312,6 +346,15 @@ def merge_ligand_and_protein(
     num_lig = ligand.x.size(0) 
     num_pro = protein.x.size(0) 
 
+    # per-atom flags (we use the stored RDKit mols)
+    lig_flags = _atom_flags_pharmacophore(ligand.mol)
+    pro_flags = _atom_flags_pharmacophore(protein.mol)
+
+    # Number of interaction features we will append on EVERY edge (intra padded w/ zeros)
+    K_INTER = 5  # [hbond, salt_bridge, pi_pi, cation_pi, hydrophobe_contact]
+
+
+
     # concatenate ligand and protein node features and positions
     x   = torch.cat([ligand.x, protein.x], dim=0)          # (N, F)
     pos = torch.cat([ligand.pos, protein.pos], dim=0)      # (N, 3)
@@ -350,9 +393,16 @@ def merge_ligand_and_protein(
         lig_type = torch.tensor([[1, 0]], dtype=torch.float).repeat(num_lig_edges, 1) # (num_lig_edges, 2)
         pro_type = torch.tensor([[0, 1]], dtype=torch.float).repeat(num_pro_edges, 1) # (num_pro_edges, 2)
     
+    
+    zeros_inter_lig = torch.zeros((num_lig_edges, K_INTER), dtype=torch.float)
+    zeros_inter_pro = torch.zeros((num_pro_edges, K_INTER), dtype=torch.float)
+    # intra edges: [original(10)] + [interaction zeros(K)] + [type]
+    ligand_edge_attr_enhanced  = torch.cat([ligand.edge_attr,  zeros_inter_lig, lig_type], dim=1)
+    protein_edge_attr_enhanced = torch.cat([protein.edge_attr, zeros_inter_pro, pro_type], dim=1)
+
     # Concatenate original edge features with type features
-    ligand_edge_attr_enhanced = torch.cat([ligand.edge_attr, lig_type], dim=1)
-    protein_edge_attr_enhanced = torch.cat([protein.edge_attr, pro_type], dim=1)
+    #ligand_edge_attr_enhanced = torch.cat([ligand.edge_attr, lig_type], dim=1)
+    #protein_edge_attr_enhanced = torch.cat([protein.edge_attr, pro_type], dim=1)
     
     # Sanity check: dimensions of edge features should be same for protein and ligand
     if ligand_edge_attr_enhanced.size(1) != protein_edge_attr_enhanced.size(1):
@@ -379,41 +429,76 @@ def merge_ligand_and_protein(
     if connect_cross:
         # all-pairs distances between ligand & protein atoms
         d = torch.cdist(pos[:num_lig], pos[num_lig:])      # (num_lig, num_pro)
-        src, dst = torch.nonzero(d < r_cut, as_tuple=True) # Find pairs within cutoff distance
-        
-        # map back to global indices, shift protein indices by num_lig
-        src_idx = src
-        dst_idx = dst + prot_shift
+        # pairs within cutoff
+        src, dst = torch.nonzero(d < r_cut, as_tuple=True)  # ligand idx, protein idx (0-based within their own sets)
 
-        cross_edge_index = torch.stack([src_idx, dst_idx], dim=0)
-        rev_edge_index   = torch.flip(cross_edge_index, [0])        # undirected
+        # map to global indices
+        src_idx = src                               # [E_cross]
+        dst_idx = dst + prot_shift                  # [E_cross]
 
-        # Cross-edge features: distance + edge type
-        dist = d[src, dst][:, None]            # (E_cross,1)
-        # Pad to match molecular bond feature order: bond_type(7) + conj(1) + ring(1) + distance(1)
-        # Use -1 as sentinel value to clearly distinguish cross-connections from molecular bonds
-        original_edge_feat_dim = ligand.edge_attr.size(1)
+        cross_edge_index = torch.stack([src_idx, dst_idx], dim=0)  # [2, E_cross]
+        rev_edge_index   = torch.flip(cross_edge_index, [0])       # undirected
+
+        # distance feature (kept as in your code)
+        dist = d[src, dst].unsqueeze(1)  # (E_cross, 1)
+
+        # ------- interaction one-hots (booleans → float) -------
+        # gather flags for selected pairs
+        def _gather(flag_lig, flag_pro):
+            # flag_* are [N] uint8 tensors
+            return flag_lig[src].to(torch.bool), flag_pro[dst].to(torch.bool)
+
+        lig_don, pro_acc = _gather(lig_flags["donor"],    pro_flags["acceptor"])
+        lig_acc, pro_don = _gather(lig_flags["acceptor"], pro_flags["donor"])
+        lig_cat, pro_ani = _gather(lig_flags["cationic"], pro_flags["anionic"])
+        lig_ani, pro_cat = _gather(lig_flags["anionic"],  pro_flags["cationic"])
+        lig_aro, pro_aro = _gather(lig_flags["aromatic"], pro_flags["aromatic"])
+        lig_hyd, pro_hyd = _gather(lig_flags["hydrophobe"], pro_flags["hydrophobe"])
+
+        # geometric thresholds (Å)
+        hb_cut   = 3.5
+        salt_cut = 4.0
+        pi_cut   = 6.0
+        catpi_cut= 6.0
+        hyd_cut  = 4.5
+
+        hbond = ((lig_don & pro_acc) | (lig_acc & pro_don)) & (dist.squeeze(1) <= hb_cut)
+        salt_bridge = ((lig_cat & pro_ani) | (lig_ani & pro_cat)) & (dist.squeeze(1) <= salt_cut)
+        pi_pi = (lig_aro & pro_aro) & (dist.squeeze(1) <= pi_cut)
+        cation_pi = ((lig_cat & pro_aro) | (lig_aro & pro_cat)) & (dist.squeeze(1) <= catpi_cut)
+        hydrophobe_contact = (lig_hyd & pro_hyd) & (dist.squeeze(1) <= hyd_cut)
+
+        inter_feats = torch.stack([
+            hbond, salt_bridge, pi_pi, cation_pi, hydrophobe_contact
+        ], dim=1).to(torch.float)   # (E_cross, K_INTER)
+
+        # ------- assemble cross-edge features -------
+        # Your original per-bond edge features had size original_edge_feat_dim (=10).
+        # We mimic that layout as zeros for the 9 non-distance slots + distance at the end.
+        original_edge_feat_dim = ligand.edge_attr.size(1)  # should be 10 in your setup
+
         cross_attr_base = torch.cat([
-            torch.zeros(dist.size(0), original_edge_feat_dim - 1),  # -1 sentinel for non-bond features
-            dist                                                           # Distance at the end, like molecular bonds
-        ], dim=1)
-        
-        # Add edge type for cross edges: [0, 0, 1] = inter_molecular
-        # (This only happens when connect_cross=True, so we always use 3-way encoding here)
-        cross_type = torch.tensor([[0, 0, 1]], dtype=torch.float).repeat(cross_attr_base.size(0), 1)
-        cross_attr = torch.cat([cross_attr_base, cross_type], dim=1)
+            torch.zeros(dist.size(0), original_edge_feat_dim - 1, dtype=torch.float),
+            dist
+        ], dim=1)  # (E_cross, 10)
 
-        # Sanity check: dimensions of cross edge features should be same for protein and ligand
+        # add interaction flags then type one-hot [0,0,1]
+        cross_type = torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float).repeat(dist.size(0), 1)
+
+        # final: [10] + [K_INTER] + [3]
+        cross_attr = torch.cat([cross_attr_base, inter_feats, cross_type], dim=1)
+
+        # Sanity check shape matches intra edges
         if cross_attr.size(1) != edge_attr.size(1):
+            # edge_attr currently holds intra edges (lig & pro) after enhancement
             raise ValueError(
-                f"Cross edge feature dimension mismatch: "
-                f"cross_attr={cross_attr.size(1)} vs existing edge_attr={edge_attr.size(1)}. "
-                f"original_edge_feat_dim={original_edge_feat_dim}, "
-                f"connect_cross={connect_cross}"
+                f"Cross edge feature dim {cross_attr.size(1)} != intra edge dim {edge_attr.size(1)}. "
+                f"Expected 10 + {K_INTER} + 3 = {10 + K_INTER + 3}."
             )
 
+        # concat both directions
         edge_index = torch.cat([edge_index, cross_edge_index, rev_edge_index], dim=1)
-        edge_attr  = torch.cat([edge_attr,  cross_attr,     cross_attr],     dim=0)
+        edge_attr  = torch.cat([edge_attr,  cross_attr,       cross_attr],     dim=0)
         origin_edges = torch.cat([
             origin_edges,
             torch.full((cross_attr.size(0)*2,), 2, dtype=torch.long)   # 2 = cross

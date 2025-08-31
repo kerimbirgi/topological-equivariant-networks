@@ -3,6 +3,9 @@ single_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_simple"
 supercell: false
 connectivity: "all_to_all"
 neighbor_types: ["max"]
+lifters:
+  - "atom:0"
+  - "bond_cross:1"
 # BindingNet stuff
 merge_graphs: true
 connect_cross: true

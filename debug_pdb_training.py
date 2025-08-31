@@ -311,6 +311,9 @@ def main(cfg: DictConfig):
 
 
             batch_iter.set_postfix(loss=float(loss.item()), lr=current_lr(opt))  
+        
+        epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val, val_mse=epoch_mse_val)
+        
 
             
 

@@ -146,18 +146,18 @@ def main(cfg: DictConfig):
     )
 
     # Load casf as test set
-    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", f"{cfg.dataset.casf_dataset}.yaml")
+    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "dataset", f"{cfg.dataset.casf_dataset}.yaml")
     casf_config: DictConfig = OmegaConf.load(casf_cfg_path)
     test_dataset = PDBBindCC(
-        index=casf_config.dataset.index,
-        root=f"data/pdbbind/{casf_config.dataset_name}",
-        lifters=list(casf_config.dataset.lifters),
-        neighbor_types=list(casf_config.dataset.neighbor_types),
-        connectivity=casf_config.dataset.connectivity,
-        supercell=casf_config.dataset.supercell,
-        connect_cross=casf_config.dataset.connect_cross,
-        r_cut=casf_config.dataset.r_cut,
-        force_reload=casf_config.dataset.force_reload if 'force_reload' in casf_config.dataset else False,
+        index=casf_config.index,
+        root=f"data/pdbbind/{cfg.dataset.casf_dataset}",
+        lifters=list(casf_config.lifters),
+        neighbor_types=list(casf_config.neighbor_types),
+        connectivity=casf_config.connectivity,
+        supercell=casf_config.supercell,
+        connect_cross=casf_config.connect_cross,
+        r_cut=casf_config.r_cut,
+        force_reload=casf_config.force_reload if 'force_reload' in casf_config else False,
     )
 
     logger.info("Dataset loaded!")
@@ -327,6 +327,7 @@ def main(cfg: DictConfig):
         model.train()
         batch_iter = tqdm(train_dataloader, desc=f"Train {epoch+1}/{num_epochs}", position=1, leave=False)
         for batch in batch_iter:
+            
             opt.zero_grad(set_to_none=True)
             batch = batch.to(device)
 

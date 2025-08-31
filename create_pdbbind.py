@@ -28,6 +28,10 @@ def main(cfg: DictConfig):
     logger.info(f"Force reload: {cfg.dataset.force_reload}")
     logger.info(f"Single graphs path: {cfg.dataset.single_graphs_path}")
 
+    logger.info(f"Supercell: {cfg.dataset.supercell}")
+    logger.info(f"Connectivity: {cfg.dataset.connectivity}")
+    logger.info(f"Neighbors: {cfg.dataset.neighbor_types}")
+
     if 'single_graphs_path' in cfg.dataset and cfg.dataset.create_single_graphs:
         create_single_graphs(cfg.dataset.index, cfg.dataset.single_graphs_path)
     
