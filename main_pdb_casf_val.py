@@ -510,6 +510,8 @@ def main(cfg: DictConfig):
         run_id=run_id,
     )
 
+    evaluate(cfg, model, valid_dataloader, device, mad, mean)
+
 
 if __name__ == "__main__":
     main()

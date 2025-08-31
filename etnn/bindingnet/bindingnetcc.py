@@ -118,7 +118,8 @@ class BindingNetCC(InMemoryDataset):
                 self.r_cut,
                 force_reload=self.force_reload
             ) # creates graphs and stores them in merged_data_path_root
-
+        print(merged_data_path_root)
+        exit()
         for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing BindingNetCC"):
             tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
             merged_data_path = os.path.join(merged_data_path_root, f'{tuple_id}.pt')
