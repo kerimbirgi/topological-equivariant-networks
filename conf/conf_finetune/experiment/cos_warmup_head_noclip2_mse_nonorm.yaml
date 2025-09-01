@@ -1,0 +1,20 @@
+# @package _global_
+eval_only: false
+
+training:
+  epochs: 200
+  batch_size: 256
+  weight_decay: 1e-4
+  scheduler_mode: 'cosine_warmup'
+  optimizer: 'AdamW'
+  min_lr: 1e-6
+  num_lr_cycles: 1
+  clip_gradients: false
+  clip_amount: 1.0
+  lr: 5e-4
+  crit: 'MSE'
+  early_stop: true
+  early_stop_patience: 20
+  normalize_targets: false
+  continue_from_weights: false
+  

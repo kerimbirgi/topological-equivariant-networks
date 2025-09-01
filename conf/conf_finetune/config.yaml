@@ -1,0 +1,57 @@
+defaults:
+  - _self_
+  - dataset: pretrain_basic
+  - experiment: standard_128
+
+dataset:
+  # these values can be overwritten by the experiments
+  lifters:
+  - "atom:0"
+  - "bond:1"
+  supercell: false
+  neighbor_types: ["max"]  # Subset of ["+1", "-1", "min", "max"]
+  connectivity: "self"  # Choice in [self, all_to_all]
+  # BindingNet stuff
+  filter_indices: false
+  merge_graphs: false
+  connect_cross: false
+  r_cut: 0
+  force_reload: false
+
+
+task_name: BindingNet
+dataset_name: ${hydra:runtime.choices.dataset}
+experiment_name: ${hydra:runtime.choices.experiment}
+results_dir: results
+eval_only: false
+
+compile: false
+seed: 42
+
+# checkpointing
+wandb_entity: null
+ckpt_dir: checkpoints
+ckpt_prefix: null
+force_restart: false
+
+model:
+  num_hidden: 128
+  num_layers: 7
+  normalize_invariants: true
+  batch_norm: false
+  lean: false
+  initial_features: ["hetero"]
+  visible_dims: null
+
+training:
+  epochs: 100
+  batch_size: 32
+  weight_decay: 1e-16
+  scheduler_mode: "cosine_annealing"
+  min_lr: 0.0
+  num_lr_cycles: 3
+  clip_gradients: true
+  clip_amount: 1.0
+  lr: 5e-4
+  save_interval: 1
+  crit: 'L1Loss'
