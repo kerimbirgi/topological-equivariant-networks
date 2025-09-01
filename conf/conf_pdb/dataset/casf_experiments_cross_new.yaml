@@ -1,5 +1,5 @@
 index: "/data2/PDBBind/processed/indexes/Index_casf.csv"
-single_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_simple"
+single_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_simple_rbf"
 supercell: false
 connectivity: "all_to_all"
 neighbor_types: ["max"]
@@ -11,4 +11,4 @@ merge_graphs: true
 connect_cross: true
 r_cut: 3.0
 force_reload: false
-create_single_graphs: false
+create_single_graphs: true
