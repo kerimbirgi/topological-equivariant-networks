@@ -448,11 +448,7 @@ def merge_ligand_and_protein(
     num_lig = ligand.x.size(0) 
     num_pro = protein.x.size(0) 
 
-    # per-atom flags (we use the stored RDKit mols)
-    lig_flags = _atom_flags_pharmacophore(ligand.mol)
-    pro_flags = _atom_flags_pharmacophore(protein.mol)
-
-    # Number of interaction features we will append on EVERY edge (intra padded w/ zeros)
+    # Number of interaction features we will append on cross edges when connect_cross=True
     K_INTER = 5  # [hbond, salt_bridge, pi_pi, cation_pi, hydrophobe_contact]
 
 
@@ -532,6 +528,10 @@ def merge_ligand_and_protein(
     # 3. (optional) ligand-protein cross edges (distance < r_cut)    
     # ------------------------------------------------------------------ #
     if connect_cross:
+        # Compute per-atom pharmacophore flags (only needed for cross-edge interactions)
+        lig_flags = _atom_flags_pharmacophore(ligand.mol)
+        pro_flags = _atom_flags_pharmacophore(protein.mol)
+        
         # all-pairs distances between ligand & protein atoms
         d = torch.cdist(pos[:num_lig], pos[num_lig:])      # (num_lig, num_pro)
         # pairs within cutoff
@@ -638,8 +638,8 @@ def build_and_save_pair(task):
             lig_out = os.path.join(out_root, "ligand", f"{tuple_id}.pt")
             pro_out = os.path.join(out_root, "protein", f"{tuple_id}.pt")
 
-            #if os.path.exists(lig_out) and os.path.exists(pro_out):
-            #    return tuple_id, "skip", ""
+            if os.path.exists(lig_out) and os.path.exists(pro_out):
+                return tuple_id, "skip", ""
 
             ligand = process_ligand_sdf(ligand_path)
             protein = process_protein_pdb_ligand_style(pocket_path)
