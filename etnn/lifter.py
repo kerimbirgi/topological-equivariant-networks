@@ -643,7 +643,7 @@ class CombinatorialComplexTransform(BaseTransform):
         # store the number of features for each rank for tensor reconstruction
         cc_dict["num_features_dict"] = {}
         for rank in range(self.lifter.dim + 1):
-            cc_dict["num_features_dict"][rank] = self.lifter.num_features_dict[rank]
+            cc_dict["num_features_dict"][str(rank)] = self.lifter.num_features_dict[rank]
 
         for att in ["edge_attr", "edge_index"]:
             if att in cc_dict.keys():
