@@ -10,7 +10,7 @@ from rdkit.Chem import rdMolDescriptors
 # Feature dimensions must match for both rings and chains
 NUM_FEATURES = 10  # Adjust based on your feature design
 
-def ring_chain_lift(graph: Data) -> set[Cell]:
+def ring_chain_lift(graph: Data, **kwargs) -> set[Cell]:
     """
     Create rank 2 cells containing both ligand rings and protein chains.
     

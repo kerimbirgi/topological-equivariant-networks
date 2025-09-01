@@ -22,11 +22,11 @@ def _bond_lift_core(graph: Data) -> set[Cell]:
         cells.add((key, tuple(map(float, EA[k].tolist()))))
     return cells
 
-def bond_lift(graph: Data) -> set[Cell]:
+def bond_lift(graph: Data, **kwargs) -> set[Cell]:
     """Bond lifter for standard datasets (no cross-connections)."""
     return _bond_lift_core(graph)
 
-def bond_lift_cross(graph: Data) -> set[Cell]:
+def bond_lift_cross(graph: Data, **kwargs) -> set[Cell]:
     """Bond lifter for datasets with cross-connections."""
     return _bond_lift_core(graph)
 

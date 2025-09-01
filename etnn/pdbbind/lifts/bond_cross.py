@@ -34,11 +34,11 @@ def bond_cross_lift(graph: Data, **kwargs) -> set[Cell]:
         Set of cells where each cell represents a ligand-protein interaction pair
     """
     # Extract parameters from kwargs with defaults
-    r_cut = kwargs.get('lifter_r_cut', kwargs.get('r_cut', 4.0))  # Try lifter_r_cut first, then r_cut, default 4.0
+    r_cut = kwargs.get('lifter_r_cut', kwargs.get('r_cut', 3.0))  # Try lifter_r_cut first, then r_cut, default 5.0
     M_RBF = kwargs.get('M_RBF', 15)
     
     # Debug: print received parameters (remove this line for production)
-    # print(f"bond_cross_lift: r_cut={r_cut}, M_RBF={M_RBF}, kwargs={kwargs}")
+    # print(f"bond_cross_lift: r_cut={r_cut}, M_RBF={M_RBF}, received kwargs keys: {list(kwargs.keys())}")
     
     return _bond_cross_lift_impl(graph, r_cut, M_RBF)
 

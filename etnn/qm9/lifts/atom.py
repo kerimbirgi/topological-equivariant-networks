@@ -47,7 +47,7 @@ def node_lift(graph: Data) -> set[Cell]:
         raise ValueError("The given graph does not have a feature matrix 'x'!")
 
     # Create nodes
-    dummy_features = tuple(range(DUMMY_NUM_FEATURES))
+    dummy_features = tuple(range(DUMMY_NUM_FEATURES))ils.
     nodes = {(frozenset([node]), dummy_features) for node in range(graph.x.size(0))}
 
     return nodes

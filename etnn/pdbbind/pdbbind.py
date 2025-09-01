@@ -48,7 +48,7 @@ class PDBBindCC(InMemoryDataset):
         self.neighbor_types = neighbor_types
         self.connectivity = connectivity
         self.connect_cross = connect_cross
-        self.r_cut = r_cut if connect_cross else 0.0
+        self.r_cut = r_cut
         self.supercell = supercell
         self.force_reload = force_reload
         self.dim = len(lifters) - 1

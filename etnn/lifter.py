@@ -236,7 +236,9 @@ def get_lifters(
             lifter = partial(lifter_registry[method_str], **kwargs)
             lifter.num_features = lifter_registry[method_str].num_features
         else:
-            lifter = lifter_registry[method_str]
+            # Pass kwargs to all lifters so they can access parameters like r_cut
+            lifter = partial(lifter_registry[method_str], **kwargs)
+            lifter.num_features = lifter_registry[method_str].num_features
 
         # Parse the ranking logic
         ranking_logic = parse_ranking_logic(lifter_str)

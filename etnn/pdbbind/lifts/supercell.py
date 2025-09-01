@@ -7,7 +7,7 @@ from etnn.combinatorial_data import Cell
 NUM_FEATURES = 12
 
 
-def supercell_lift(graph: Data) -> set[Cell]:
+def supercell_lift(graph: Data, **kwargs) -> set[Cell]:
     """
     Return the entire protein-ligand complex as a single supercell with binding-focused features.
     

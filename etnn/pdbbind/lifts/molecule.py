@@ -8,7 +8,7 @@ from etnn.combinatorial_data import Cell
 # Feature dimensions must match for both molecules
 NUM_FEATURES = 8
 
-def molecule_lift(graph: Data) -> set[Cell]:
+def molecule_lift(graph: Data, **kwargs) -> set[Cell]:
     """
     Create rank 3 cells containing ligand molecule and protein molecule.
     

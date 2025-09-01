@@ -4,7 +4,7 @@ from etnn.combinatorial_data import Cell
 # In merged graphs we append a 1-d origin flag to the 13 base features → 14
 NUM_FEATURES = 14
 
-def atom_lift(graph: Data) -> set[Cell]:
+def atom_lift(graph: Data, **kwargs) -> set[Cell]:
     if (not hasattr(graph, "x")) or (graph.x is None):
         raise ValueError("The given graph does not have a feature matrix 'x'!")
 
