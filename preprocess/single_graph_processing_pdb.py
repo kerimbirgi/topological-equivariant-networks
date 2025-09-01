@@ -113,6 +113,27 @@ EXPECTED_EDGE_FEATURES = 9 + M_RBF
 
 PREFER_MOL2 = True
 def process_ligand_sdf(sdf_path: str) -> Data:
+    """
+    Process ligand SDF files to create PyTorch Geometric Data objects.
+    
+    Node Features (13D):
+    - Atomic number (1D): Element type
+    - Degree (1D): Number of bonded neighbors  
+    - Formal charge (1D): Molecular charge state
+    - Atomic mass (1D): Element mass
+    - In ring flag (1D): Binary indicator for ring membership
+    - Aromatic flag (1D): Binary indicator for aromaticity
+    - Hybridization one-hot (7D): SP, SP2, SP3, SP3D, SP3D2, S, UNSPECIFIED
+    
+    Edge Features (25D = 9 + 16):
+    - Bond type one-hot (7D): SINGLE, DOUBLE, TRIPLE, AROMATIC, ONEANDAHALF, TWOANDAHALF, UNSPECIFIED
+    - Conjugation flag (1D): Binary indicator for conjugated bonds
+    - Ring bond flag (1D): Binary indicator for bonds in rings
+    - Distance RBF (16D): Radial basis functions encoding bond length (cutoff=3.0Å)
+    
+    Returns:
+        Data object with x (node features), pos (3D coordinates), edge_index, edge_attr
+    """
     if not os.path.exists(sdf_path):
         print(f"Path doesnt exist {sdf_path}")
         #exit()
@@ -263,9 +284,28 @@ def process_ligand_sdf(sdf_path: str) -> Data:
     )
 
 def process_protein_pdb_ligand_style(pdb_path: str) -> Data:
-    """Return a Data object with the SAME node & edge feature format
-    used by *process_ligand_sdf* so that ligands and protein pockets can be
-    merged into a single batch.
+    """
+    Process protein PDB files to create PyTorch Geometric Data objects with identical 
+    feature format to process_ligand_sdf for seamless merging.
+    
+    Node Features (13D):
+    - Atomic number (1D): Element type
+    - Degree (1D): Number of bonded neighbors  
+    - Formal charge (1D): Molecular charge state
+    - Atomic mass (1D): Element mass
+    - In ring flag (1D): Binary indicator for ring membership
+    - Aromatic flag (1D): Binary indicator for aromaticity
+    - Hybridization one-hot (7D): SP, SP2, SP3, SP3D, SP3D2, S, UNSPECIFIED
+    
+    Edge Features (25D = 9 + 16):
+    - Bond type one-hot (7D): SINGLE, DOUBLE, TRIPLE, AROMATIC, ONEANDAHALF, TWOANDAHALF, UNSPECIFIED
+    - Conjugation flag (1D): Binary indicator for conjugated bonds
+    - Ring bond flag (1D): Binary indicator for bonds in rings
+    - Distance RBF (16D): Radial basis functions encoding bond length (cutoff=3.0Å)
+    
+    Returns:
+        Data object with x (node features), pos (3D coordinates), edge_index, edge_attr
+        Compatible with ligand graphs for merging operations.
     """
     mol = Chem.MolFromPDBFile(pdb_path, removeHs=False, sanitize=False)
     if mol is None:
@@ -367,12 +407,36 @@ def merge_ligand_and_protein(
         r_cut: float = 5.0,
 ) -> Data:
     """
-    Return a single Data object that contains both graphs.
+    Merge ligand and protein graphs into a single heterogeneous molecular complex.
+    
+    Merged Node Features (14D = 13 + 1):
+    - Original features (13D): Same as individual graphs (atomic_num, degree, charge, mass, in_ring, aromatic, hybridization_oh)
+    - Origin flag (1D): 0.0 = ligand atom, 1.0 = protein atom
+    
+    Merged Edge Features (without cross-connect: 27D = 25 + 2):
+    - Original features (25D): Same as individual graphs (bond_type_oh, conjugation, ring_bond, distance_rbf)
+    - Interaction features (5D): [0,0,0,0,0] for intra-molecular edges (filled with zeros)
+    - Edge type one-hot (2D): [1,0] = intra_ligand, [0,1] = intra_protein
+    
+    Merged Edge Features (with cross-connect: 28D = 25 + 5 + 3):
+    - Original features (25D): Same as individual graphs
+    - Interaction features (5D): [hbond, salt_bridge, pi_pi, cation_pi, hydrophobe_contact] for cross edges, zeros for intra
+    - Edge type one-hot (3D): [1,0,0] = intra_ligand, [0,1,0] = intra_protein, [0,0,1] = inter_molecular
+    
+    Cross-Edge Interaction Features (when connect_cross=True):
+    - H-bond: Donor-acceptor pairs within 3.5Å
+    - Salt bridge: Oppositely charged atoms within 4.0Å  
+    - π-π stacking: Aromatic-aromatic atoms within 6.0Å
+    - Cation-π: Charged-aromatic atoms within 6.0Å
+    - Hydrophobic contact: Non-polar atoms within 4.5Å
+    
+    Parameters:
+        connect_cross: If True, adds intermolecular edges within r_cut distance
+        r_cut: Distance cutoff for cross edges (default 5.0Å)
 
-    New attributes
-    --------------
-    origin_nodes : (N,)   0 = ligand node,   1 = protein node
-    origin_edges : (E,)   0 = ligand edge,   1 = protein edge, 2 = cross edge
+    New attributes:
+        origin_nodes : (N,)   0 = ligand node,   1 = protein node
+        origin_edges : (E,)   0 = ligand edge,   1 = protein edge, 2 = cross edge
     """
     # ------------------------------------------------------------------ #
     # 1. nodes
