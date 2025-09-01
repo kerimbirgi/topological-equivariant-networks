@@ -113,7 +113,7 @@ def get_model(cfg: DictConfig, dataset: Dataset) -> nn.Module:
         )
     elif cfg.task_name == "PDBBind":
         global_pool = True # What does this do?
-        sparse_invariant_computation = False # What does this do?
+        sparse_invariant_computation = cfg.model.get('sparse_invariant_computation', False) # Read from config
         pos_update = False # What does this do?
 
         adjacencies = get_adjacency_types(
