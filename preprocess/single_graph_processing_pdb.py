@@ -415,10 +415,9 @@ def merge_ligand_and_protein(
     
     Merged Edge Features (without cross-connect: 27D = 25 + 2):
     - Original features (25D): Same as individual graphs (bond_type_oh, conjugation, ring_bond, distance_rbf)
-    - Interaction features (5D): [0,0,0,0,0] for intra-molecular edges (filled with zeros)
     - Edge type one-hot (2D): [1,0] = intra_ligand, [0,1] = intra_protein
     
-    Merged Edge Features (with cross-connect: 28D = 25 + 5 + 3):
+    Merged Edge Features (with cross-connect: 33D = 25 + 5 + 3):
     - Original features (25D): Same as individual graphs
     - Interaction features (5D): [hbond, salt_bridge, pi_pi, cation_pi, hydrophobe_contact] for cross edges, zeros for intra
     - Edge type one-hot (3D): [1,0,0] = intra_ligand, [0,1,0] = intra_protein, [0,0,1] = inter_molecular
@@ -491,21 +490,24 @@ def merge_ligand_and_protein(
         # [intra_ligand, intra_protein, inter_molecular]
         lig_type = torch.tensor([[1, 0, 0]], dtype=torch.float).repeat(num_lig_edges, 1) # (num_lig_edges, 3)
         pro_type = torch.tensor([[0, 1, 0]], dtype=torch.float).repeat(num_pro_edges, 1) # (num_pro_edges, 3)
+        
+        # Add interaction feature slots (filled with zeros for intra-molecular edges)
+        zeros_inter_lig = torch.zeros((num_lig_edges, K_INTER), dtype=torch.float)
+        zeros_inter_pro = torch.zeros((num_pro_edges, K_INTER), dtype=torch.float)
+        # intra edges: [original(25)] + [interaction zeros(5)] + [type(3)]
+        ligand_edge_attr_enhanced  = torch.cat([ligand.edge_attr,  zeros_inter_lig, lig_type], dim=1)
+        protein_edge_attr_enhanced = torch.cat([protein.edge_attr, zeros_inter_pro, pro_type], dim=1)
     else:
         # [intra_ligand, intra_protein]
         lig_type = torch.tensor([[1, 0]], dtype=torch.float).repeat(num_lig_edges, 1) # (num_lig_edges, 2)
         pro_type = torch.tensor([[0, 1]], dtype=torch.float).repeat(num_pro_edges, 1) # (num_pro_edges, 2)
-    
-    
-    zeros_inter_lig = torch.zeros((num_lig_edges, K_INTER), dtype=torch.float)
-    zeros_inter_pro = torch.zeros((num_pro_edges, K_INTER), dtype=torch.float)
-    # intra edges: [original(10)] + [interaction zeros(K)] + [type]
-    ligand_edge_attr_enhanced  = torch.cat([ligand.edge_attr,  zeros_inter_lig, lig_type], dim=1)
-    protein_edge_attr_enhanced = torch.cat([protein.edge_attr, zeros_inter_pro, pro_type], dim=1)
+        
+        # No interaction features needed when cross connections are disabled
+        # intra edges: [original(25)] + [type(2)]
+        ligand_edge_attr_enhanced  = torch.cat([ligand.edge_attr, lig_type], dim=1)
+        protein_edge_attr_enhanced = torch.cat([protein.edge_attr, pro_type], dim=1)
 
-    # Concatenate original edge features with type features
-    #ligand_edge_attr_enhanced = torch.cat([ligand.edge_attr, lig_type], dim=1)
-    #protein_edge_attr_enhanced = torch.cat([protein.edge_attr, pro_type], dim=1)
+
     
     # Sanity check: dimensions of edge features should be same for protein and ligand
     if ligand_edge_attr_enhanced.size(1) != protein_edge_attr_enhanced.size(1):
@@ -588,7 +590,7 @@ def merge_ligand_and_protein(
         # add interaction flags then type one-hot [0,0,1]
         cross_type = torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float).repeat(dist.size(0), 1)
 
-        # final: [10] + [K_INTER] + [3]
+        # final: [25] + [K_INTER] + [3] = [25] + [5] + [3] = 33D
         cross_attr = torch.cat([cross_attr_base, inter_feats, cross_type], dim=1)
 
         # Sanity check shape matches intra edges
@@ -596,7 +598,7 @@ def merge_ligand_and_protein(
             # edge_attr currently holds intra edges (lig & pro) after enhancement
             raise ValueError(
                 f"Cross edge feature dim {cross_attr.size(1)} != intra edge dim {edge_attr.size(1)}. "
-                f"Expected 10 + {K_INTER} + 3 = {10 + K_INTER + 3}."
+                f"Expected 25 + {K_INTER} + 3 = {25 + K_INTER + 3}."
             )
 
         # concat both directions
