@@ -863,7 +863,7 @@ if __name__ == "__main__":
         "--index", 
         type=str, 
         #default="/data2/PDBBind/processed/indexes/Index_pdbbind_general.csv"
-        default="/data2/PDBBind/processed/indexes/Index_casf.csv"
+        default="/rds/general/user/kgb24/ephemeral/BindingNetv2/processed/indexes/Index_pretrain_soft_overlap_tanimoto_proteins.csv"
     )
     parser.add_argument(
         "--num_workers", 
@@ -891,7 +891,8 @@ if __name__ == "__main__":
         "--out_root", 
         type=str,
         #default="/data2/PDBBind/processed/etnn/base_graphs_simple"
-        default="/data2/PDBBind/processed/etnn/casf_graphs_simple"
+        #default="/data2/PDBBind/processed/etnn/casf_graphs_simple"
+        default="/rds/general/user/kgb24/ephemeral/BindingNetv2/processed/pretrain_graphs"
     )
     parser.add_argument(
         "--connect_cross",
@@ -907,7 +908,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--log_path",
         type=str,
-        default="/data2/home/kgb24/topological-equivariant-networks/logs/single_graphs_processing_pdb.log"
+        default="/rds/general/user/kgb24/home/topological-equivariant-networks/logs/pretrain_graphs.log"
     )
     args = parser.parse_args()
 
@@ -974,10 +975,10 @@ if __name__ == "__main__":
     
     ok = skipped = failed = 0
     if args.num_workers == 1:
-        print("Creating merged graphs sequentially")
+        print("Creating graphs sequentially")
         for task in tqdm(tasks, total=len(tasks), file=sys.stdout,
                          mininterval=0.2, smoothing=0, dynamic_ncols=True,
-                         desc="Merging graphs (sequential)"):
+                         desc=f"Creating graphs (sequential), phase={args.phase}"):
             # merge_from_precomputed is called the same way as in pool.map (single tuple arg)
             if args.phase == "build":
                 tid, status, msg = build_and_save_pair(task)

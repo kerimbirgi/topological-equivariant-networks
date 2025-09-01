@@ -28,7 +28,7 @@ class PDBBindCC(InMemoryDataset):
         # dim,
         connectivity: str,
         connect_cross: bool = False,
-        r_cut: float = 5.0,
+        r_cut: float = 3.0,
         merge_graphs: bool = False,
         single_graphs_path: str = "data/pdbbind/general_no_supercell_no_crossconnect/preprocessed",
         merged_graphs_path: str = None,
@@ -59,6 +59,7 @@ class PDBBindCC(InMemoryDataset):
             self.lifters.append("supercell:" + str(self.dim))
 
         # Get lifter and adjacencies
+        lifter_kwargs['r_cut'] = r_cut
         self.lifter = Lifter(self.lifters, LIFTER_REGISTRY, self.dim, **lifter_kwargs)
         self.adjacencies = get_adjacency_types(
             self.dim,
