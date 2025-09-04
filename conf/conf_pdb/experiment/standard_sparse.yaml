@@ -14,8 +14,10 @@ training:
   clip_amount: 1.0
   lr: 3e-4
   crit: 'MSE'
-  early_stop: true
-  early_stop_patience: 20
+  early_stop: false
   normalize_targets: false
   gradient_accumulate: false
+
+model:
+  sparse_invariant_computation: true
   

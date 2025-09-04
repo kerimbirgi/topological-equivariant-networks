@@ -1,9 +1,15 @@
 # @package _global_
 eval_only: false
 
+finetune:
+  reinitialize_head: false
+  freeze_backbone: false
+
+pretrained_weights_path: "/data2/home/kgb24/topological-equivariant-networks/finetune_checkpoints/checkpoints/cos_warmup_head_noclip2_mse_nonorm_finetune__pdb_general.pth"
+
 training:
   epochs: 200
-  batch_size: 128
+  batch_size: 16
   weight_decay: 1e-4
   scheduler_mode: 'cosine_warmup'
   optimizer: 'AdamW'
@@ -11,7 +17,7 @@ training:
   num_lr_cycles: 1
   clip_gradients: false
   clip_amount: 1.0
-  lr: 5e-4
+  lr: 2e-4
   crit: 'MSE'
   early_stop: true
   early_stop_patience: 20

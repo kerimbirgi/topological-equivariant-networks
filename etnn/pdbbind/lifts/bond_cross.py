@@ -38,7 +38,7 @@ def bond_cross_lift(graph: Data, **kwargs) -> set[Cell]:
     M_RBF = kwargs.get('M_RBF', 15)
     
     # Debug: print received parameters (remove this line for production)
-    print(f"bond_cross_lift: r_cut={r_cut}, M_RBF={M_RBF}, received kwargs keys: {list(kwargs.keys())}")
+    # print(f"bond_cross_lift: r_cut={r_cut}, M_RBF={M_RBF}, received kwargs keys: {list(kwargs.keys())}")
     
     return _bond_cross_lift_impl(graph, r_cut, M_RBF)
 

@@ -1,0 +1,8 @@
+Test MAE: 0.9406026601791382
+Test MSE: 1.4383389949798584
+Test RMSE: 1.1993076801300049
+Test Pearson correlation coefficient (PCC): 0.5415616550948961, PCC p-value: 0.0
+Test Kendall-Tau: 0.3745021700776487, Kendall-Tau p-value: 0.0
+Normalization parameters - MAD: tensor([1.1518]), Mean: tensor([6.6441])
+Predictions range: [0.5654444694519043, 11.448331832885742]
+Targets range: [0.019999999552965164, 14.569999694824219]

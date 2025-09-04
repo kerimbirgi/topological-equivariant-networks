@@ -30,7 +30,8 @@ class BindingNetCC(InMemoryDataset):
         connect_cross: bool = False,
         r_cut: float = 5.0,
         merge_graphs: bool = False,
-        preprocessed_graphs_path: str = "data/bindingnetcc/subset_20p_base_graphs/preprocessed",
+        single_graphs_path: str = "data/bindingnetcc/base_graphs_rbf/preprocessed",
+        merged_graphs_path: str = None,
         # merge_neighbors: str,
         supercell: Optional[bool] = False,
         transform: Optional[Callable] = None,
@@ -41,7 +42,8 @@ class BindingNetCC(InMemoryDataset):
     ) -> None:
         self.index = index
         self.merge_graphs = merge_graphs
-        self.preprocessed_graphs_path = preprocessed_graphs_path
+        self.single_graphs_path = single_graphs_path
+        self.merged_graphs_path = merged_graphs_path
         self.lifters = lifters
         self.neighbor_types = neighbor_types
         self.connectivity = connectivity
@@ -93,33 +95,28 @@ class BindingNetCC(InMemoryDataset):
         )
         logger.info(f"Created CombinatorialComplexTransform with lifters: {self.lifters}")
 
-        # Path for merged data
-        #if self.supercell:
-        #    supercell_str = 'supercell'
-        #else:
-        #    supercell_str = 'no_supercell'
-        #if self.connect_cross:
-        #    r_cut_str = f'r_cut_{self.r_cut}'
-        #    connect_cross_str = 'connect_cross_' + r_cut_str
-        #else:
-        #    connect_cross_str = 'no_connect_cross'
-        #dataset_modifications = f'{supercell_str}_{connect_cross_str}_{self.connectivity}'
-        merged_data_path_root = os.path.join(self.root, f'preprocessed/merged')
+        if self.merged_graphs_path == None:
+            merged_data_path_root = os.path.join(self.root, f'preprocessed/merged')
+        else: 
+            merged_data_path_root = os.path.join(self.merged_graphs_path, f'merged')
         logger.info(f"Merged data path: {merged_data_path_root}")
+
+
 
         if self.merge_graphs:
             logger.info("Creating merged graphs from existing ligand and protein graphs")
+            logger.info(f"Single graphs path: {self.single_graphs_path}")
             os.makedirs(merged_data_path_root, exist_ok=True)
             create_graphs_from_dataset(
                 df, 
-                self.preprocessed_graphs_path, 
+                self.single_graphs_path, 
                 merged_data_path_root,
                 self.connect_cross,
                 self.r_cut,
                 force_reload=self.force_reload
             ) # creates graphs and stores them in merged_data_path_root
-        print(merged_data_path_root)
-        exit()
+
+
         for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing BindingNetCC"):
             tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
             merged_data_path = os.path.join(merged_data_path_root, f'{tuple_id}.pt')

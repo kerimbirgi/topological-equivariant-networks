@@ -2,10 +2,13 @@
 model:
   num_hidden: 128
 
+eval_only: true
+
 training:
   batch_size: 64
   weight_decay: 1e-16
   scheduler_mode: 'cosine_annealing'
+  optimizer: 'Adam'
   min_lr: 0.0
   num_lr_cycles: 3
   clip_gradients: true
@@ -13,3 +16,7 @@ training:
   test_interval: 10
   lr: 5e-4
   crit: 'L1Loss'
+  continue_from_weights: false
+  normalize_targets: false
+  early_stop: false
+  early_stop_patience: 20

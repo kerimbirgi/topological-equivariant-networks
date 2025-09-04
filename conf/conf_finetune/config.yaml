@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - dataset: pretrain_basic
-  - experiment: standard_128
+  - dataset: pdb_general
+  - experiment: cos_warmup_head_noclip2_mse_nonorm
 
 dataset:
   # these values can be overwritten by the experiments
@@ -55,3 +55,5 @@ training:
   lr: 5e-4
   save_interval: 1
   crit: 'L1Loss'
+  num_workers: 8
+  pin_memory: true

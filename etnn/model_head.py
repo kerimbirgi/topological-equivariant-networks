@@ -139,7 +139,9 @@ class ETNN(nn.Module):
                 visible_dims=self.visible_dims,
                 num_out=num_out,
                 dropout=self.dropout if self.dropout > 0 else 0.1,
-                use_multiagg=True,   # keep sum/mean/max alongside attention
+                use_multiagg=True,   
+                attn_tau=1.0,                 
+                use_attn_layernorm=False,
             )
 
     def forward(self, graph: Data) -> Tensor:
@@ -242,6 +244,113 @@ class ETNN(nn.Module):
 
     def __str__(self):
         return f"ETNN ({self.type})"
+    
+    @torch.no_grad()
+    def predict_with_maps(self, graph: Data):
+        device = graph.pos.device
+        cell_ind = {str(i): graph.cell_list(i, format=self.cell_list_fmt) for i in self.visible_dims}
+        adj = {a: getattr(graph, f"adj_{a}") for a in self.adjacencies if hasattr(graph, f"adj_{a}")}
+
+        # (same feature/invariant pipeline as forward)
+        features = {}
+        for feature_type in self.initial_features:
+            features[feature_type] = {}
+            for i in self.visible_dims:
+                if feature_type == "node":
+                    features[feature_type][str(i)] = invariants.compute_centroids(cell_ind[str(i)], graph.x)
+                elif feature_type == "mem":
+                    mem = {i: getattr(graph, f"mem_{i}") for i in self.visible_dims}
+                    features[feature_type][str(i)] = mem[i].float()
+                elif feature_type == "hetero":
+                    features[feature_type][str(i)] = getattr(graph, f"x_{i}")
+
+        x = {str(i): torch.cat([features[ft][str(i)] for ft in self.initial_features], dim=1)
+             for i in self.visible_dims}
+
+        pos = graph.pos
+        x = {dim: self.feature_embedding[dim](feat) for dim, feat in x.items()}
+        inv_comp_kwargs = {"cell_ind": cell_ind, "adj": adj, "hausdorff": self.hausdorff}
+        if self.sparse_invariant_computation:
+            agg_indices, _ = invariants.sparse_computation_indices_from_cc(cell_ind, adj, self.sparse_agg_max_cells)
+            inv_comp_kwargs["rank_agg_indices"] = agg_indices
+        inv = self.inv_fun(pos, **inv_comp_kwargs)
+        if self.normalize_invariants:
+            inv = {a: self.inv_normalizer[a](f) for a, f in inv.items()}
+
+        for layer in self.layers:
+            x, pos = layer(x, adj, inv, pos)
+            if self.pos_update:
+                inv = self.inv_fun(pos, **inv_comp_kwargs)
+                if self.normalize_invariants:
+                    inv = {a: self.inv_normalizer[a](f) for a, f in inv.items()}
+            if self.dropout > 0:
+                x = {d: nn.functional.dropout(feat, p=self.dropout) for d, feat in x.items()}
+
+        out = {d: self.pre_pool[d](feat) for d, feat in x.items()}
+        cell_batch = {str(i): utils.slices_to_pointer(graph._slice_dict[f"slices_{i}"]).to(device)
+                      for i in self.visible_dims}
+        return self.head(out, cell_batch, return_maps=True)  # -> (pred, maps)
+    
+    def _init_linear_or_norm(self, m: nn.Module):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
+            if hasattr(m, "reset_parameters"):
+                m.reset_parameters()
+    
+    def reinit_head(self):
+        """
+        For fine-tuning purposes.
+        Re-initialize ONLY the head.
+        """
+        if self.global_pool:
+            # reinit everything inside the head
+            self.head.apply(self._init_linear_or_norm)
+        else:
+            raise NotImplementedError
+    
+    def get_head_modules(self):
+        return [self.head]
+    
+    def get_backbone_modules(self):
+        mods = [self.feature_embedding, self.layers]
+        # invariants normalizer is not part of 'head'
+        if getattr(self, "inv_normalizer", None) is not None:
+            mods.append(self.inv_normalizer)
+        # pre_pool is backbone when global_pool=True (projects to H); head consumes it
+        if self.global_pool:
+            mods.append(self.pre_pool)
+        return mods
+    
+    def get_head_parameters(self):
+        for m in self.get_head_modules():
+            for p in m.parameters():
+                if p.requires_grad:
+                    yield p
+
+    def get_backbone_parameters(self):
+        for m in self.get_backbone_modules():
+            for p in m.parameters():
+                if p.requires_grad:
+                    yield p
+    
+    def freeze_backbone(self):
+        for p in self.get_backbone_parameters():
+            p.requires_grad = False
+
+    def unfreeze_backbone(self):
+        for p in self.get_backbone_parameters():
+            p.requires_grad = True
+
+    def set_backbone_eval(self, flag: bool):
+        """Put backbone in eval() during freeze so BatchNorm running stats dont update."""
+        mods = [self.feature_embedding, self.layers, self.pre_pool]
+        if getattr(self, "inv_normalizer", None) is not None:
+            mods.append(self.inv_normalizer)
+        for m in mods:
+            m.eval() if flag else m.train()
 
 
 
@@ -310,19 +419,24 @@ class GatedMultiAggHead(nn.Module):
     
 
 class GlobalAdditiveAttention(nn.Module):
-    def __init__(self, hidden: int):
+    def __init__(self, hidden: int, tau: float = 1.0, use_layernorm: bool = False):
         super().__init__()
+        self.tau = tau
+        self.pre_score_norm = nn.LayerNorm(hidden) if use_layernorm else None
         self.score = nn.Sequential(
             nn.Linear(hidden, hidden),
             nn.Tanh(),
             nn.Linear(hidden, 1),
         )
 
-    def forward(self, h: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
+    def forward(self, h: torch.Tensor, batch: torch.Tensor, return_weights: bool = False):
         # h: [N, H], batch: [N] graph ids
-        s = self.score(h).squeeze(-1)         # [N]
-        a = softmax(s, batch)                  # [N], sums to 1 per graph
-        return global_add_pool(a.unsqueeze(-1) * h, batch)  # [B, H]
+        if self.pre_score_norm is not None:
+            h = self.pre_score_norm(h)
+        s = self.score(h).squeeze(-1) / self.tau    # [N]
+        a = softmax(s, batch)                       # [N], sums to 1 per graph
+        pooled = global_add_pool(a.unsqueeze(-1) * h, batch)
+        return (pooled, a) if return_weights else pooled
 
 
 class AttentiveHead(nn.Module):
@@ -336,14 +450,18 @@ class AttentiveHead(nn.Module):
       Final MLP -> R^{num_out}
     """
     def __init__(self, num_hidden: int, visible_dims: list[int], num_out: int,
-                 dropout: float = 0.1, use_multiagg: bool = True):
+                 dropout: float = 0.1, use_multiagg: bool = True,
+                 attn_tau: float = 1.0, use_attn_layernorm: bool = False):
         super().__init__()
         self.visible_dims = [str(d) for d in visible_dims]
         self.num_hidden = num_hidden
         self.use_multiagg = use_multiagg
 
         # per-rank attention scorer
-        self.attn = nn.ModuleDict({d: GlobalAdditiveAttention(num_hidden) for d in self.visible_dims})
+        self.attn = nn.ModuleDict({
+            d: GlobalAdditiveAttention(num_hidden, tau=attn_tau, use_layernorm=use_attn_layernorm) 
+            for d in self.visible_dims
+        })
 
         in_per_rank = num_hidden * (4 if use_multiagg else 1)  # [sum, mean, max, att] or just [att]
         self.rank_proj = nn.ModuleDict({d: nn.Linear(in_per_rank, num_hidden) for d in self.visible_dims})
@@ -361,12 +479,18 @@ class AttentiveHead(nn.Module):
         self.final = nn.Sequential(*layers)
 
     def forward(self, per_rank_feats: dict[str, torch.Tensor],
-                per_rank_batch: dict[str, torch.Tensor]) -> torch.Tensor:
+                per_rank_batch: dict[str, torch.Tensor],
+                return_maps: bool = False) -> torch.Tensor | tuple[torch.Tensor, dict]:
         rank_vecs = []
+        maps = {} if return_maps else None
         for d in self.visible_dims:
             h = per_rank_feats[d]       # [N, H]
             b = per_rank_batch[d]       # [N]
-            att_pool  = self.attn[d](h, b)  # [B, H]
+            if return_maps:
+                att_pool, a = self.attn[d](h, b, return_weights=True)  # a: [N]
+                maps[d] = {"weights": a, "batch": b}
+            else:
+                att_pool = self.attn[d](h, b) # [B, H]
             if self.use_multiagg:
                 sum_pool  = global_add_pool(h, b)
                 mean_pool = global_mean_pool(h, b)
@@ -374,8 +498,12 @@ class AttentiveHead(nn.Module):
                 agg = torch.cat([sum_pool, mean_pool, max_pool, att_pool], dim=1)  # [B, 4H]
             else:
                 agg = att_pool  # [B, H]
+
             rank_vecs.append(self.rank_proj[d](agg))  # [B, H]
 
         state = torch.cat(rank_vecs, dim=1)  # [B, R*H]
         out = self.final(state)              # [B, num_out]
         return out.squeeze(-1) if out.shape[-1] == 1 else out
+    
+
+

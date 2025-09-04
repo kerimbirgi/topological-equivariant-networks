@@ -362,7 +362,7 @@ def main(cfg: DictConfig):
     wandb_config["num_params"] = num_params
 
     wandb.init(
-        project="bindingnet_regression",
+        project="bindingnet_pretrain",
         name=f"{cfg.experiment_name}_{cfg.dataset_name}",
         entity=os.environ.get("WANDB_ENTITY"),
         config=wandb_config,

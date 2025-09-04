@@ -7,20 +7,75 @@ import pandas as pd
 from scipy.stats import pearsonr, kendalltau
 
 import hydra
+from hydra.utils import get_original_cwd
 import torch
 from omegaconf import DictConfig, OmegaConf
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-import utils
+import utils_head as utils
 import wandb
 from etnn.bindingnet.bindingnetcc import BindingNetCC
+from etnn.pdbbind.pdbbind import PDBBindCC
 
 # torch.set_float32_matmul_precision("high")  # Use high precision for matmul
 os.environ["WANDB__SERVICE_WAIT"] = "600"
 
+SPLIT_OOD = True
 
 logger = logging.getLogger(__name__)
+
+def save_checkpoint(path, model, best_model, best_pcc, opt, sched, epoch, run_id):
+    device = next(model.parameters()).device
+    model.to("cpu")
+    best_model.to("cpu")
+    state = {
+        "epoch": epoch + 1,
+        "model": model.state_dict(),
+        "best_model": best_model.state_dict(),
+        "best_pcc": best_pcc,
+        "optimizer": opt.state_dict(),
+        "scheduler": sched.state_dict(),
+        "run_id": run_id,
+    }
+    model.to(device)
+    best_model.to(device)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(state, path)
+
+def make_protein_ood_split(dataset, val_frac=0.2, seed=42):
+    N = len(dataset)
+    prot_ids = []
+    for i in range(N):
+        g = dataset[i]
+        pid = None
+        if hasattr(g, "id") and g.id is not None:
+            # expected format: TARGETCHEMBLID_MOLECULECHEMBLID
+            pid = str(g.id).split("_", 1)[0]  # protein side
+        # (optionally: fallbacks if you later add attributes like g.uniprot)
+        prot_ids.append(pid)
+
+    unique_proteins = sorted({p for p in prot_ids if p is not None})
+    rng = np.random.default_rng(seed)
+    rng.shuffle(unique_proteins)
+    n_val = max(1, int(len(unique_proteins) * val_frac))
+    val_proteins = set(unique_proteins[:n_val])
+    is_val = np.array([(p in val_proteins) if p is not None else False for p in prot_ids])
+    val_idx = np.nonzero(is_val)[0]
+    trn_idx = np.nonzero(~is_val)[0]
+
+    # sanity check: disjoint proteins
+    trn_prots = {prot_ids[i] for i in trn_idx if prot_ids[i] is not None}
+    val_prots = {prot_ids[i] for i in val_idx if prot_ids[i] is not None}
+    assert trn_prots.isdisjoint(val_prots), "Protein overlap between train and val!"
+
+    train_subset = dataset.index_select(trn_idx)
+    valid_subset = dataset.index_select(val_idx)
+
+    print(f"[protein-OOD] train_samples={len(train_subset)}, val_samples={len(valid_subset)}, \n"
+          f"train_unique_proteins={len(trn_prots)}, val_unique_proteins={len(val_proteins)}")
+    
+    return train_subset, valid_subset, trn_idx, val_idx
 
 def current_lr(opt):
     return opt.param_groups[0]["lr"]
@@ -108,7 +163,7 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean):
     preds_cpu: list[torch.Tensor] = []
     targets_cpu: list[torch.Tensor] = []
     with torch.no_grad():
-        for batch in tqdm(test_dataloader, total=len(test_dataloader), desc="Running evaluation"):
+        for batch in test_dataloader:
             batch = batch.to(device)
             pred = model(batch)
             preds_cpu.append(pred.detach().cpu())
@@ -183,6 +238,21 @@ def main(cfg: DictConfig):
     )
     logger.info("Dataset loaded!")
 
+    casf_cfg_path = os.path.join(get_original_cwd(), "conf", "conf_pdb", "dataset", f"casf_experiments_rbf.yaml")
+    casf_config: DictConfig = OmegaConf.load(casf_cfg_path)
+    val_dataset = PDBBindCC(
+        index=casf_config.index,
+        root=f"data/pdbbind/casf_experiments_rbf",
+        lifters=list(casf_config.lifters),
+        neighbor_types=list(casf_config.neighbor_types),
+        connectivity=casf_config.connectivity,
+        supercell=casf_config.supercell,
+        connect_cross=casf_config.connect_cross,
+        r_cut=casf_config.r_cut,
+        force_reload=casf_config.force_reload if 'force_reload' in casf_config else False,
+    )
+    logger.info("Dataset loaded!")
+
     # ==== Get model =====
     logger.info("Loading Model...")
     model = utils.get_model(cfg, dataset)
@@ -194,79 +264,31 @@ def main(cfg: DictConfig):
     logger.info("Model loaded!")
 
 
-    # Get train/test splits
-    indices_files = os.listdir(cfg.dataset.splits_dir)
-    cleanup = (
-        'train_etnn_filtered.npy' not in indices_files or 
-        'val_etnn_filtered.npy' not in indices_files or 
-        'test_etnn_filtered.npy' not in indices_files
-    )
-
-    if cleanup or cfg.dataset.filter_indices:
-        train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_indices.npy'))
-        val_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_indices.npy'))
-        test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_indices.npy'))
-        # Clean up dataset to only include valid tuples
-        df = pd.read_csv(cfg.dataset.index)
-        kept_mask = []
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="Filtering indices"):
-            tuple_id = row['Target ChEMBLID'] + '_' + row['Molecule ChEMBLID']
-            merged_data_path = os.path.join(dataset.root, 'preprocessed/merged', f'{tuple_id}.pt')
-            kept_mask.append(os.path.exists(merged_data_path))
-        kept_mask = np.array(kept_mask, dtype=bool)
-
-        # Map original to compacted indices
-        print("Remapping indices...")
-        compacted = np.cumsum(kept_mask) - 1  # valid where kept_mask is True
-        def remap(orig_idx: np.ndarray) -> np.ndarray:
-            idx = np.asarray(orig_idx, dtype=np.int64).reshape(-1)
-            valid = kept_mask[idx]
-            return compacted[idx[valid]].astype(np.int64)
-        train_sel = remap(train_indices)
-        valid_sel = remap(val_indices)
-        test_sel  = remap(test_indices)
-        print("Remapping done!")
-
-        np.save(os.path.join(cfg.dataset.splits_dir, 'train_etnn_filtered.npy'), train_sel)
-        np.save(os.path.join(cfg.dataset.splits_dir, 'val_etnn_filtered.npy'), valid_sel)
-        np.save(os.path.join(cfg.dataset.splits_dir, 'test_etnn_filtered.npy'), test_sel)
-        print("saved new indices to:")
-        print(cfg.dataset.splits_dir)
-        train_indices = train_sel
-        val_indices = valid_sel
-        test_indices = test_sel
-    else:
-        train_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'train_etnn_filtered.npy'))
-        val_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'val_etnn_filtered.npy'))
-        test_indices = np.load(os.path.join(cfg.dataset.splits_dir, 'test_etnn_filtered.npy'))
-
-    train_subset = dataset.index_select(train_indices)
-    valid_subset = dataset.index_select(val_indices)
-    test_subset = dataset.index_select(test_indices)
-
-    print(f"Length of train dataset: {len(train_subset)}")
-    print(f"Length of validation dataset: {len(valid_subset)}")
-    print(f"Length of test dataset: {len(test_subset)}")
+    print(f"Length of train dataset: {len(dataset)}")
+    print(f"Length of validation dataset: {len(val_dataset)}")
 
     train_dataloader = DataLoader(
-        train_subset,
+        dataset,
         batch_size=cfg.training.batch_size,
         shuffle=True,
     )
     valid_dataloader = DataLoader(
-        valid_subset,
-        batch_size=cfg.training.batch_size,
-        shuffle=False,
-    )
-    test_dataloader = DataLoader(
-        test_subset,
+        val_dataset,
         batch_size=cfg.training.batch_size,
         shuffle=False,
     )
 
+
     # Precompute average deviation of target in training dataloader
-    mean, mad = utils.calc_mean_mad(train_dataloader)
-    mean, mad = mean.to(device), mad.to(device)
+    if cfg.training.normalize_targets:
+        logger.info("Normalization On!")
+        mean, mad = utils.calc_mean_mad(train_dataloader)
+        mean, mad = mean.to(device), mad.to(device)
+    else:
+        logger.info("Normalization Off!")
+        # normalization/denormalization return identity this way
+        mean = torch.tensor([0.0], device=device)
+        mad  = torch.tensor([1.0], device=device)
 
     # ==== Get optimization objects =====
     if cfg.training.crit == 'L1Loss':
@@ -290,7 +312,7 @@ def main(cfg: DictConfig):
 
     sched = build_scheduler(cfg, scheduler_mode, opt)
 
-    best_loss = float("inf")
+    best_pcc = 0
 
 
     # === Configure checkpoint and wandb logging ===
@@ -320,8 +342,8 @@ def main(cfg: DictConfig):
 
     # ==== If eval only, evaluate and exit ====
     if cfg.eval_only:
-        logger.info("Running evaluation onl with best model")
-        evaluate(cfg, best_model, test_dataloader, device, mad, mean)
+        logger.info("Running evaluation only with best model on validation set")
+        evaluate(cfg, best_model, valid_dataloader, device, mad, mean)
         return
     # ==== otherwise continue training ====
 
@@ -341,7 +363,7 @@ def main(cfg: DictConfig):
     wandb_config["num_params"] = num_params
 
     wandb.init(
-        project="bindingnet_regression",
+        project="bindingnet_pretrain",
         name=f"{cfg.experiment_name}_{cfg.dataset_name}",
         entity=os.environ.get("WANDB_ENTITY"),
         config=wandb_config,
@@ -352,6 +374,7 @@ def main(cfg: DictConfig):
 
     # === Training loop ===
     num_epochs=cfg.training.epochs
+    early_stop_counter = 0
     epoch_iter = tqdm(range(start_epoch, cfg.training.epochs), desc="Epochs", position=0)
     for epoch in epoch_iter:
         epoch_start_time, epoch_mae_train, epoch_mse_train, epoch_loss_train, epoch_mae_val, epoch_mse_val = time.time(), 0, 0, 0, 0, 0
@@ -386,6 +409,8 @@ def main(cfg: DictConfig):
         
 
         model.eval()
+        preds_cpu: list[torch.Tensor] = []
+        targets_cpu: list[torch.Tensor] = []
         with torch.no_grad():
             for _, batch in enumerate(valid_dataloader):
                 batch = batch.to(device)
@@ -395,9 +420,16 @@ def main(cfg: DictConfig):
                 denorm_pred = pred * mad + mean
                 val_mae = torch.nn.functional.l1_loss(denorm_pred, batch.y)
                 val_mse = torch.nn.functional.mse_loss(denorm_pred, batch.y)
+                preds_cpu.append(denorm_pred.detach().cpu())
+                targets_cpu.append(batch.y.detach().cpu())
                 #mae = crit(denorm_pred, batch.y)
                 epoch_mae_val += val_mae.item()
                 epoch_mse_val += val_mse.item()
+
+        preds = torch.cat(preds_cpu)   # on CPU
+        targets = torch.cat(targets_cpu)  # on CPU
+        pcc, pcc_pvalue = pearsonr(preds, targets)
+        tau, tau_pvalue = kendalltau(preds, targets, variant="b")  # (tau, p-value)
 
         epoch_mae_train /= len(train_dataloader)
         epoch_loss_train /= len(train_dataloader)
@@ -410,23 +442,22 @@ def main(cfg: DictConfig):
         else:
             sched.step()
 
-        if epoch_mae_val < best_loss:
-            best_loss = epoch_mae_val
+        if pcc > best_pcc:
+            best_pcc = pcc
             best_model = copy.deepcopy(model)
 
         # Save checkpoint
-        if epoch % cfg.training.save_interval == 0:
-            logger.info(f"Saving checkpoint at epoch {epoch + 1}")
-            utils.save_checkpoint(
-                path=checkpoint_path,
-                model=model,
-                best_model=best_model,
-                best_loss=best_loss,
-                opt=opt,
-                sched=sched,
-                epoch=epoch,
-                run_id=run_id,
-            )
+        logger.info(f"Saving checkpoint at epoch {epoch + 1}")
+        save_checkpoint(
+            path=checkpoint_path,
+            model=model,
+            best_model=best_model,
+            best_pcc=best_pcc,
+            opt=opt,
+            sched=sched,
+            epoch=epoch,
+            run_id=run_id,
+        )
 
         epoch_end_time = time.time()
         epoch_duration = epoch_end_time - epoch_start_time
@@ -438,6 +469,8 @@ def main(cfg: DictConfig):
                 "Train MSE": epoch_mse_train,
                 "Validation MAE": epoch_mae_val,
                 "Validation MSE": epoch_mse_val,
+                "PCC": pcc,
+                "Kendalls Tau": tau,
                 "Epoch Duration": epoch_duration,
                 "Learning Rate": current_lr(opt),
             },
@@ -445,9 +478,18 @@ def main(cfg: DictConfig):
         )
         epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val)
 
+        if cfg.training.early_stop:
+            if pcc < best_pcc:
+                early_stop_counter +=1
+            else:
+                early_stop_counter = 0
+            
+            if early_stop_counter > cfg.training.early_stop_patience:
+                break # Finish training early if patience has been surpassed
+
     # Save final checkpoint
     logger.info("Saving final checkpoint...")
-    utils.save_checkpoint(
+    save_checkpoint(
         path=checkpoint_path,
         model=model,
         best_model=best_model,
@@ -458,14 +500,14 @@ def main(cfg: DictConfig):
         run_id=run_id,
     )
 
-    # ==== Final test evaluation after training completion ====
-    logger.info("Training completed. Running final evaluation on test set...")
+    # ==== Final validation evaluation after training completion ====
+    logger.info("Training completed. Running final evaluation on validation set...")
 
     logger.info("Running evaluation with current model")
-    evaluate(cfg, model, test_dataloader, device, mad, mean)
+    evaluate(cfg, model, valid_dataloader, device, mad, mean)
 
     logger.info("Running evaluation with best model")
-    evaluate(cfg, best_model, test_dataloader, device, mad, mean)
+    evaluate(cfg, best_model, valid_dataloader, device, mad, mean)
     
     logger.info("Training and evaluation completed successfully!")
 

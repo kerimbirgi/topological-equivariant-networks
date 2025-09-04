@@ -1,6 +1,6 @@
 # @package _global_
 
-eval_only: false
+eval_only: true
 
 training:
   epochs: 200

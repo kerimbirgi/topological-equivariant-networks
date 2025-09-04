@@ -25,6 +25,53 @@ SPLIT_OOD = True
 
 logger = logging.getLogger(__name__)
 
+def load_checkpoint(checkpoint_path, model, opt, sched, force_restart):
+    best_model = copy.deepcopy(model)
+    device = next(model.parameters()).device
+    if not force_restart and os.path.isfile(checkpoint_path):
+        print("Loading model from checkpoint!")
+        checkpoint = torch.load(checkpoint_path)
+        model.to("cpu")
+        best_model.to("cpu")
+        model.load_state_dict(checkpoint["model"])
+        best_model.load_state_dict(checkpoint["best_model"])
+        if "best_pcc" in checkpoint:
+            best_pcc = checkpoint["best_pcc"]
+        else:
+            best_pcc = checkpoint["best_loss"]
+        opt.load_state_dict(checkpoint["optimizer"])
+        sched.load_state_dict(checkpoint["scheduler"])
+        model.to(device)
+        best_model.to(device)
+        
+        # BUG FIX ATTEMPT: Ensure optimizer state is on the correct device
+        for state in opt.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
+        
+        return checkpoint["epoch"], checkpoint["run_id"], best_model, best_pcc
+    else:
+        return 0, None, best_model, 0
+
+def save_checkpoint(path, model, best_model, best_pcc, opt, sched, epoch, run_id):
+    device = next(model.parameters()).device
+    model.to("cpu")
+    best_model.to("cpu")
+    state = {
+        "epoch": epoch + 1,
+        "model": model.state_dict(),
+        "best_model": best_model.state_dict(),
+        "best_pcc": best_pcc,
+        "optimizer": opt.state_dict(),
+        "scheduler": sched.state_dict(),
+        "run_id": run_id,
+    }
+    model.to(device)
+    best_model.to(device)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(state, path)
+
 def make_protein_ood_split(dataset, val_frac=0.2, seed=42):
     N = len(dataset)
     prot_ids = []
@@ -277,8 +324,7 @@ def main(cfg: DictConfig):
         )
     else:
         raise ValueError(f"Unknown training.scheduler='{scheduler_mode}'")
-    best_loss = float("inf")
-
+    best_pcc = 0
 
     # === Configure checkpoint and wandb logging ===
     ckpt_filename = f"{cfg.experiment_name}__{cfg.dataset_name}.pth"
@@ -287,9 +333,17 @@ def main(cfg: DictConfig):
     checkpoint_path = f"casf_val/{cfg.ckpt_dir}/{ckpt_filename}"
     logging.info(f"Checkpoint path set as: {checkpoint_path}")
 
-    start_epoch, run_id, best_model, best_loss = utils.load_checkpoint(
+    start_epoch, run_id, best_model, best_pcc = load_checkpoint(
         checkpoint_path, model, opt, sched, cfg.force_restart
     )
+    logging.info(f"Best PCC set to {best_pcc}")
+
+    # ==== If eval only, evaluate and exit ====
+    if cfg.eval_only:
+        logger.info("Running evaluation only with best model")
+        evaluate(cfg, best_model, valid_dataloader, device, mad, mean)
+        return
+    # ==== otherwise continue training ====
 
 
     if start_epoch >= cfg.training.epochs:
@@ -308,7 +362,7 @@ def main(cfg: DictConfig):
     wandb_config["num_params"] = num_params
 
     wandb.init(
-        project="pdbbind_casf_validation",
+        project="pdbbind_casf_validation_head",
         name=f"{cfg.experiment_name}_{cfg.dataset_name}",
         entity=os.environ.get("WANDB_ENTITY"),
         config=wandb_config,
@@ -330,8 +384,11 @@ def main(cfg: DictConfig):
             
             opt.zero_grad(set_to_none=True)
             batch = batch.to(device)
-
-            pred = model(batch)
+            try:
+                pred = model(batch) # Theres 1 sample that crashes the higher order features
+            except:
+                print(f"Skipped Sample {batch} due to forward pass fail")
+                continue
             loss = crit(pred, (batch.y - mean) / mad)
             
             denorm_pred = pred * mad + mean
@@ -387,23 +444,22 @@ def main(cfg: DictConfig):
         else:
             sched.step()
 
-        if epoch_mae_val < best_loss:
-            best_loss = epoch_mae_val
+        if pcc > best_pcc:
+            best_pcc = pcc
             best_model = copy.deepcopy(model)
 
         # Save checkpoint
-        if epoch % cfg.training.save_interval == 0:
-            logger.info(f"Saving checkpoint at epoch {epoch + 1}")
-            utils.save_checkpoint(
-                path=checkpoint_path,
-                model=model,
-                best_model=best_model,
-                best_loss=best_loss,
-                opt=opt,
-                sched=sched,
-                epoch=epoch,
-                run_id=run_id,
-            )
+        logger.info(f"Saving checkpoint at epoch {epoch + 1}")
+        save_checkpoint(
+            path=checkpoint_path,
+            model=model,
+            best_model=best_model,
+            best_pcc=best_pcc,
+            opt=opt,
+            sched=sched,
+            epoch=epoch,
+            run_id=run_id,
+        )
 
         epoch_end_time = time.time()
         epoch_duration = epoch_end_time - epoch_start_time
@@ -425,7 +481,7 @@ def main(cfg: DictConfig):
         epoch_iter.set_postfix(train_mae=epoch_mae_train, val_mae=epoch_mae_val)
 
         if cfg.training.early_stop:
-            if epoch_mae_val > best_loss:
+            if pcc < best_pcc:
                 early_stop_counter +=1
             else:
                 early_stop_counter = 0
@@ -436,14 +492,14 @@ def main(cfg: DictConfig):
 
     # Save final checkpoint
     logger.info("Saving final checkpoint...")
-    utils.save_checkpoint(
+    save_checkpoint(
         path=checkpoint_path,
         model=model,
         best_model=best_model,
-        best_loss=best_loss,
+        best_pcc=best_pcc,
         opt=opt,
         sched=sched,
-        epoch=cfg.training.epochs - 1,
+        epoch=epoch,
         run_id=run_id,
     )
 

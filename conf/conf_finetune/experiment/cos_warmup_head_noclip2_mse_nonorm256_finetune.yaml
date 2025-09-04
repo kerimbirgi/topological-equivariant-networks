@@ -1,9 +1,20 @@
 # @package _global_
 eval_only: false
 
+pretrained_weights_path: "/data2/home/kgb24/topological-equivariant-networks/pretrained_weights/cos_warmup_head_noclip2_mse_nonorm256__pretrain_basic.pth"
+
+finetune:
+  reinitialize_head: true
+  freeze_backbone: true
+  warmup_head: false
+  
+model:
+  num_hidden: 256
+
+
 training:
   epochs: 200
-  batch_size: 128
+  batch_size: 256
   weight_decay: 1e-4
   scheduler_mode: 'cosine_warmup'
   optimizer: 'AdamW'

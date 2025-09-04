@@ -18,5 +18,5 @@ training:
   crit: 'L1Loss'
   continue_from_weights: false
   normalize_targets: false
-  early_stop: false
+  early_stop: true
   early_stop_patience: 20

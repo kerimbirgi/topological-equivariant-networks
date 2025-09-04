@@ -7,10 +7,10 @@ neighbor_types: ["max"]
 lifters:
   - "atom:0"
   - "bond:1"
-  - "bond_cross_lift:2"
+  - "ring:2"
 # BindingNet stuff
 merge_graphs: false
 connect_cross: false
-r_cut: 3
+r_cut: 0
 force_reload: false
 create_single_graphs: false

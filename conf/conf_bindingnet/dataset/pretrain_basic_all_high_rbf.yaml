@@ -1,4 +1,4 @@
-index: "/data2/BindingNetv2/processed/indexes/Index_pretrain_soft_overlap_tanimoto_proteins.csv"
+index: "/data2/BindingNetv2/processed/indexes/Index_pretrain_soft_overlap_tanimoto_proteins_high.csv"
 splits_dir: "/data2/BindingNetv2/processed/splits/pretrain_rbf"
 single_graphs_path: "data/bindingnetcc/base_graphs_rbf/preprocessed"
 merged_graphs_path: "data/bindingnetcc/base_graphs_rbf/preprocessed"
@@ -8,6 +8,6 @@ neighbor_types: ["max"]
 # BindingNet stuff
 connect_cross: false
 r_cut: 0
-merge_graphs: false
+merge_graphs: true
 force_reload: false
-create_single_graphs: false
+create_single_graphs: true

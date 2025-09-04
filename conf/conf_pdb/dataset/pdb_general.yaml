@@ -1,8 +1,12 @@
 index: "/data2/PDBBind/processed/indexes/Index_pdbbind_general.csv"
 single_graphs_path: "/data2/PDBBind/processed/etnn/base_graphs_simple"
+merged_graphs_path: "/data2/PDBBind/processed/etnn/base_graphs_simple"
 supercell: false
 neighbor_types: ["max"]  # Subset of ["+1", "-1", "min", "max"]
 connectivity: "self"  # Choice in [self, all_to_all]
+lifters:
+  - "atom:0"
+  - "bond:1"
 # BindingNet stuff
 connect_cross: false
 r_cut: 0
