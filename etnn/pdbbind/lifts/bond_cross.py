@@ -280,32 +280,53 @@ def _atom_flags_pharmacophore(mol) -> dict:
         "hydrophobe": torch.zeros(num_atoms, dtype=torch.uint8),
     }
     
-    # Load pharmacophore feature factory
-    fdefName = os.path.join(RDConfig.RDDataDir, 'BaseFeatures.fdef')
-    factory = rdMolChemicalFeatures.BuildFeatureFactory(fdefName)
-    
-    # Get features for the molecule
-    num_features = factory.GetNumMolFeatures(mol)
-    
-    # Process each pharmacophore feature
-    for i in range(num_features):
-        feat = factory.GetMolFeature(mol, i)
-        feat_type = feat.GetType()
-        atom_indices = feat.GetAtomIds()
+    # Try to extract pharmacophore features, but handle cases where it fails
+    # (e.g., for large protein structures where pharmacophore analysis isn't suitable)
+    try:
+        # Ensure ring information is computed before pharmacophore analysis
+        try:
+            # This initializes the ring information that RDKit needs
+            if rdMolDescriptors is not None:
+                rdMolDescriptors.CalcNumRings(mol)
+        except Exception:
+            # If ring computation fails, continue without it
+            pass
         
-        for atom_idx in atom_indices:
-            if feat_type == 'Donor':
-                flags["donor"][atom_idx] = 1
-            elif feat_type == 'Acceptor':
-                flags["acceptor"][atom_idx] = 1
-            elif feat_type == 'PosIonizable':
-                flags["cationic"][atom_idx] = 1
-            elif feat_type == 'NegIonizable':
-                flags["anionic"][atom_idx] = 1
-            elif feat_type == 'Aromatic':
-                flags["aromatic"][atom_idx] = 1
-            elif feat_type == 'Hydrophobe':
-                flags["hydrophobe"][atom_idx] = 1
+        # Load pharmacophore feature factory
+        if rdMolChemicalFeatures is None:
+            raise ImportError("rdMolChemicalFeatures not available")
+        fdefName = os.path.join(RDConfig.RDDataDir, 'BaseFeatures.fdef')
+        factory = rdMolChemicalFeatures.BuildFeatureFactory(fdefName)
+        
+        # Get features for the molecule
+        num_features = factory.GetNumMolFeatures(mol)
+        
+        # Process each pharmacophore feature
+        for i in range(num_features):
+            feat = factory.GetMolFeature(mol, i)
+            feat_type = feat.GetType()
+            atom_indices = feat.GetAtomIds()
+            
+            for atom_idx in atom_indices:
+                if feat_type == 'Donor':
+                    flags["donor"][atom_idx] = 1
+                elif feat_type == 'Acceptor':
+                    flags["acceptor"][atom_idx] = 1
+                elif feat_type == 'PosIonizable':
+                    flags["cationic"][atom_idx] = 1
+                elif feat_type == 'NegIonizable':
+                    flags["anionic"][atom_idx] = 1
+                elif feat_type == 'Aromatic':
+                    flags["aromatic"][atom_idx] = 1
+                elif feat_type == 'Hydrophobe':
+                    flags["hydrophobe"][atom_idx] = 1
+                    
+    except Exception as e:
+        # If pharmacophore analysis fails (e.g., for large protein structures),
+        # return default values (all zeros) and continue
+        print(f"Warning: Pharmacophore analysis failed for molecule with {num_atoms} atoms: {e}")
+        print("Using default pharmacophore flags (all zeros)")
+        # flags already initialized to zeros, so we can just return them
     
     return flags
 
