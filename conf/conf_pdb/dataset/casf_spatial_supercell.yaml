@@ -1,0 +1,15 @@
+index: "/data2/PDBBind/processed/indexes/Index_casf.csv"
+single_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_spatial"
+merged_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_spatial"
+supercell: true
+connectivity: "all_to_all"
+neighbor_types: []
+lifters:
+  - "atom:0"
+  - "bond:1"
+# BindingNet stuff
+merge_graphs: false
+connect_cross: false
+r_cut: 0
+force_reload: false
+create_single_graphs: false

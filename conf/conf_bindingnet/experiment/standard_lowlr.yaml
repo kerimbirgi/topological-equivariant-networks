@@ -2,7 +2,7 @@
 model:
   num_hidden: 128
 
-eval_only: true
+eval_only: false
 
 training:
   batch_size: 64

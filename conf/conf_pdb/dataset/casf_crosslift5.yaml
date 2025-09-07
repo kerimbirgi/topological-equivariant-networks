@@ -1,0 +1,16 @@
+index: "/data2/PDBBind/processed/indexes/Index_casf.csv"
+single_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_simple_rbf"
+merged_graphs_path: "/data2/PDBBind/processed/etnn/casf_graphs_simple_rbf"
+supercell: false
+connectivity: "all_to_all"
+neighbor_types: ["max"]
+lifters:
+  - "atom:0"
+  - "bond:1"
+  - "bond_cross_lift:2"
+# BindingNet stuff
+merge_graphs: false
+connect_cross: false
+r_cut: 5
+force_reload: false
+create_single_graphs: false

@@ -4,7 +4,7 @@ eval_only: false
 
 training:
   epochs: 100
-  batch_size: 16
+  batch_size: 8
   weight_decay: 1e-16
   scheduler_mode: 'cosine_warmup'
   optimizer: 'AdamW'
@@ -12,9 +12,9 @@ training:
   num_lr_cycles: 1
   clip_gradients: true
   clip_amount: 1.0
-  lr: 3e-4
+  lr: 4e-4
   crit: 'MSE'
-  early_stop: true
+  early_stop: false
   early_stop_patience: 20
   normalize_targets: false
   gradient_accumulate: false
