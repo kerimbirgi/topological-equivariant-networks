@@ -1,1 +1,0 @@
-python main_bindingnet.py dataset=full_no_supercell_no_crossconnect experiment=lronplateau

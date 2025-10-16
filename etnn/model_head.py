@@ -216,8 +216,8 @@ class ETNN(nn.Module):
                         adj: self.inv_normalizer[adj](feature)
                         for adj, feature in inv.items()
                     }
-            # apply dropout if needed
-            if self.dropout > 0:
+            # apply dropout if needed (only during training)
+            if self.dropout > 0 and self.training:
                 x = {
                     dim: nn.functional.dropout(feature, p=self.dropout)
                     for dim, feature in x.items()
@@ -283,7 +283,7 @@ class ETNN(nn.Module):
                 inv = self.inv_fun(pos, **inv_comp_kwargs)
                 if self.normalize_invariants:
                     inv = {a: self.inv_normalizer[a](f) for a, f in inv.items()}
-            if self.dropout > 0:
+            if self.training and self.dropout > 0:
                 x = {d: nn.functional.dropout(feat, p=self.dropout) for d, feat in x.items()}
 
         out = {d: self.pre_pool[d](feat) for d, feat in x.items()}
@@ -399,7 +399,7 @@ class GatedMultiAggHead(nn.Module):
         # per_rank_feats[dim]: [N_dim, H] after ETNN.pre_pool
         # per_rank_batch[dim]: [N_dim] mapping nodes/cells to graph index
         rank_vecs = []
-        for d in self.visible_dims:
+        for d in sorted(self.visible_dims):  # Ensure deterministic iteration order
             h = per_rank_feats[d]                     # [N, H]
             b = per_rank_batch[d]                     # [N]
             g = torch.sigmoid(self.gates[d](h))       # [N, 1]
@@ -434,7 +434,15 @@ class GlobalAdditiveAttention(nn.Module):
         if self.pre_score_norm is not None:
             h = self.pre_score_norm(h)
         s = self.score(h).squeeze(-1) / self.tau    # [N]
-        a = softmax(s, batch)                       # [N], sums to 1 per graph
+        
+        # Use deterministic softmax instead of torch_geometric.utils.softmax
+        a = torch.zeros_like(s)
+        unique_graphs = torch.unique(batch, sorted=True)  # Use sorted=True for determinism
+        for graph_id in unique_graphs:
+            mask = (batch == graph_id)
+            if mask.sum() > 0:
+                a[mask] = torch.softmax(s[mask], dim=0)
+        
         pooled = global_add_pool(a.unsqueeze(-1) * h, batch)
         return (pooled, a) if return_weights else pooled
 
@@ -456,6 +464,7 @@ class AttentiveHead(nn.Module):
         self.visible_dims = [str(d) for d in visible_dims]
         self.num_hidden = num_hidden
         self.use_multiagg = use_multiagg
+        self.dropout = dropout  # Store dropout value for manual control
 
         # per-rank attention scorer
         self.attn = nn.ModuleDict({
@@ -502,7 +511,20 @@ class AttentiveHead(nn.Module):
             rank_vecs.append(self.rank_proj[d](agg))  # [B, H]
 
         state = torch.cat(rank_vecs, dim=1)  # [B, R*H]
-        out = self.final(state)              # [B, num_out]
+        
+        # Apply final layers with proper dropout control
+        if self.training and self.dropout > 0:
+            # During training, use the sequential with dropout
+            out = self.final(state)
+        else:
+            # During evaluation, manually apply layers without dropout
+            x = state
+            for layer in self.final:
+                if isinstance(layer, nn.Dropout):
+                    continue  # Skip dropout during evaluation
+                x = layer(x)
+            out = x
+            
         return out.squeeze(-1) if out.shape[-1] == 1 else out
     
 

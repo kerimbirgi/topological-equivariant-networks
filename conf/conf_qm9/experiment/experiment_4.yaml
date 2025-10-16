@@ -1,7 +1,0 @@
-# @package _global_
-defaults:
-  - /dataset: atom_bond__super__max__all
-
-model:
-  num_hidden: 100
-  visible_dims: [0, 1]

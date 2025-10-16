@@ -1,7 +1,0 @@
-#@package _global_
-defaults:
-  - /dataset: cc
-
-model:
-  pos_update: false
-  hausdorff: true

@@ -115,6 +115,14 @@ def evaluate(cfg: DictConfig, model, test_dataloader, device, mad, mean, results
     # ==== Evaluation ====
     logging.info(f"Evaluating model...\nTest samples:  {len(test_dataloader.dataset)}")
     model.eval()
+    
+    # CRITICAL: Explicitly disable dropout and set all modules to eval mode
+    for module in model.modules():
+        if hasattr(module, 'training'):
+            module.training = False
+        if hasattr(module, 'p') and hasattr(module, 'inplace'):
+            module.p = 0.0
+
     preds_cpu: list[torch.Tensor] = []
     targets_cpu: list[torch.Tensor] = []
     with torch.no_grad():
@@ -234,9 +242,11 @@ def main(cfg: DictConfig):
     #    batch_size=cfg.training.batch_size,
     #    shuffle=False,
     #)
+    # Use num_workers=0 during evaluation for determinism
+    eval_num_workers = 0 if cfg.eval_only else cfg.training.num_workers
     valid_dataloader = DataLoader(
         test_dataset,
-        num_workers=cfg.training.num_workers,
+        num_workers=eval_num_workers,
         pin_memory=cfg.training.pin_memory,
         batch_size=cfg.training.batch_size,
         shuffle=False,
